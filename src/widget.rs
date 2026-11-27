@@ -7,17 +7,15 @@ use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, Webvi
 use windows_sys::Win32::Foundation::{HWND, LPARAM, POINT, RECT, SIZE, WPARAM};
 use windows_sys::Win32::Graphics::Dwm::{DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
 use windows_sys::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONULL,
-    MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromWindow,
+    GetMonitorInfoW, HMONITOR, MONITOR_DEFAULTTONULL, MONITOR_DEFAULTTOPRIMARY, MONITORINFO,
+    MonitorFromWindow,
 };
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use windows_sys::w;
 
 const WIDGET_LABEL: &str = "widget";
-const TOOLTIP_LABEL: &str = "widget-tooltip";
 const READING_EVENT: &str = "netbar-widget-reading";
-const TOOLTIP_EVENT: &str = "netbar-widget-tooltip";
 const PANEL_DPI: u32 = 96;
 const SURFACE_RETRY: Duration = Duration::from_secs(30);
 
@@ -28,8 +26,6 @@ pub const ACTION_DRAG_BEGIN: WPARAM = 3;
 pub const ACTION_DRAG_MOVE: WPARAM = 4;
 pub const ACTION_DRAG_END: WPARAM = 5;
 pub const ACTION_DRAG_CANCEL: WPARAM = 6;
-pub const ACTION_HOVER_ENTER: WPARAM = 7;
-pub const ACTION_HOVER_LEAVE: WPARAM = 8;
 
 type Color = [u8; 3];
 
@@ -68,7 +64,6 @@ struct Reading {
 pub struct WidgetSnapshot {
     revision: u64,
     reading: Option<Reading>,
-    tooltip: String,
 }
 
 pub struct WidgetChannel {
@@ -81,25 +76,10 @@ pub fn widget_snapshot(
     window: WebviewWindow,
     state: State<'_, WidgetChannel>,
 ) -> Result<WidgetSnapshot, String> {
-    match window.label() {
-        WIDGET_LABEL | TOOLTIP_LABEL => {
-            let snapshot = lock(&state.data);
-            Ok(if window.label() == TOOLTIP_LABEL {
-                WidgetSnapshot {
-                    revision: snapshot.revision,
-                    tooltip: snapshot.tooltip.clone(),
-                    ..Default::default()
-                }
-            } else {
-                WidgetSnapshot {
-                    revision: snapshot.revision,
-                    reading: snapshot.reading.clone(),
-                    ..Default::default()
-                }
-            })
-        }
-        _ => Err("This window cannot access the taskbar display.".into()),
+    if window.label() != WIDGET_LABEL {
+        return Err("This window cannot access the taskbar display.".into());
     }
+    Ok(lock(&state.data).clone())
 }
 
 #[tauri::command]
@@ -118,20 +98,16 @@ pub fn widget_action(
         "drag-move" => ACTION_DRAG_MOVE,
         "drag-end" => ACTION_DRAG_END,
         "drag-cancel" => ACTION_DRAG_CANCEL,
-        "hover-enter" => ACTION_HOVER_ENTER,
-        "hover-leave" => ACTION_HOVER_LEAVE,
         _ => return Err("Unknown taskbar action.".into()),
     };
-    let mut point = POINT::default();
-    if matches!(id, ACTION_CONTEXT | ACTION_DRAG_BEGIN | ACTION_DRAG_MOVE)
-        && unsafe { GetCursorPos(&mut point) } == 0
-    {
-        return Err("The pointer location could not be read.".into());
-    }
-    let value = match id {
-        ACTION_CONTEXT => ((point.x as u16 as u32) | ((point.y as u16 as u32) << 16)) as LPARAM,
-        ACTION_DRAG_BEGIN | ACTION_DRAG_MOVE => point.x as LPARAM,
-        _ => 0,
+    let value = if matches!(id, ACTION_DRAG_BEGIN | ACTION_DRAG_MOVE) {
+        let mut point = POINT::default();
+        if unsafe { GetCursorPos(&mut point) } == 0 {
+            return Err("The pointer location could not be read.".into());
+        }
+        point.x as LPARAM
+    } else {
+        0
     };
     if unsafe { PostMessageW(state.control as HWND, WIDGET_ACTION, id, value) } == 0 {
         return Err("The NetBar monitor has closed.".into());
@@ -145,9 +121,7 @@ pub struct Widget {
     placement: Option<Placement>,
     taskbar: Taskbar,
     surface: Option<Surface>,
-    tooltip: Option<Surface>,
     next_build: Option<Instant>,
-    next_tooltip_build: Option<Instant>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -171,20 +145,12 @@ impl Widget {
             placement: None,
             taskbar: Taskbar::default(),
             surface: None,
-            tooltip: None,
             next_build: None,
-            next_tooltip_build: None,
         }
     }
 
     pub fn dpi(&self) -> u32 {
         self.taskbar.dpi()
-    }
-
-    pub fn visible(&self) -> bool {
-        self.surface
-            .as_ref()
-            .is_some_and(|surface| surface.shown && surface.live())
     }
 
     pub fn window(&self) -> Option<&WebviewWindow> {
@@ -232,12 +198,11 @@ impl Widget {
             } else {
                 data.revision += 1;
                 data.reading = Some(reading);
-                Some((data.revision, data.reading.clone()))
+                Some(data.clone())
             }
         };
 
         if !placement.visible {
-            self.hide_tooltip();
             if let Some(surface) = self.surface.take() {
                 surface.destroy();
             }
@@ -246,12 +211,7 @@ impl Widget {
         if changed || force || self.surface.is_none() {
             self.refresh_placement(control);
         }
-        if let (Some(window), Some((revision, reading))) = (self.window(), event) {
-            let payload = WidgetSnapshot {
-                revision,
-                reading,
-                ..Default::default()
-            };
+        if let (Some(window), Some(payload)) = (self.window(), event) {
             let _ = window.emit_to(WIDGET_LABEL, READING_EVENT, payload);
         }
     }
@@ -266,7 +226,7 @@ impl Widget {
             .as_ref()
             .map_or(control, |surface| surface.hwnd);
         if !self.taskbar.refresh(own) {
-            self.hide_surfaces();
+            self.hide();
             return;
         }
         let dpi = self.dpi();
@@ -275,7 +235,7 @@ impl Widget {
             cy: scaled(placement.height, dpi),
         };
         let Some((x, y)) = self.taskbar.position(size, placement.offset) else {
-            self.hide_surfaces();
+            self.hide();
             return;
         };
         if self.surface.is_none() && due(self.next_build) {
@@ -301,77 +261,15 @@ impl Widget {
         }
     }
 
-    pub fn update_tooltip(&mut self, text: &str) {
-        invalidate_surface(&mut self.tooltip, &mut self.next_tooltip_build);
-        let Some(widget) = self
-            .surface
-            .as_ref()
-            .filter(|surface| surface.shown && surface.live())
-        else {
-            return;
-        };
-        let Some(anchor) = widget.bounds else { return };
-        let Some(bounds) = tooltip_bounds(widget.hwnd, anchor, self.dpi(), text) else {
-            return;
-        };
-        let event = {
-            let mut data = lock(&self.data);
-            if data.tooltip == text {
-                None
-            } else {
-                data.revision += 1;
-                data.tooltip = text.to_owned();
-                Some(WidgetSnapshot {
-                    revision: data.revision,
-                    tooltip: data.tooltip.clone(),
-                    ..Default::default()
-                })
-            }
-        };
-        if self.tooltip.is_none() && due(self.next_tooltip_build) {
-            match Surface::build(
-                &self.app,
-                TOOLTIP_LABEL,
-                "NetBar traffic",
-                "widget-tooltip.html",
-            ) {
-                Ok(surface) => self.tooltip = Some(surface),
-                Err(error) => {
-                    eprintln!("Could not start the NetBar traffic tooltip: {error}");
-                    self.next_tooltip_build = Some(retry_after(&error));
-                }
-            }
-        }
-        if let Some(tooltip) = &mut self.tooltip {
-            tooltip.place(bounds, false);
-            if let Some(event) = event {
-                let _ = tooltip.window.emit_to(TOOLTIP_LABEL, TOOLTIP_EVENT, event);
-            }
-        }
-    }
-
-    pub fn hide_tooltip(&mut self) {
-        if let Some(tooltip) = self.tooltip.take() {
-            tooltip.destroy();
-        }
-        let mut data = lock(&self.data);
-        if !data.tooltip.is_empty() {
-            data.revision += 1;
-            data.tooltip.clear();
-        }
-    }
-
-    fn hide_surfaces(&mut self) {
+    fn hide(&mut self) {
         if let Some(surface) = &mut self.surface {
             surface.hide();
         }
-        self.hide_tooltip();
     }
 }
 
 impl Drop for Widget {
     fn drop(&mut self) {
-        self.hide_tooltip();
         if let Some(surface) = self.surface.take() {
             surface.destroy();
         }
@@ -515,42 +413,6 @@ impl Surface {
         self.hide();
         let _ = self.window.destroy();
     }
-}
-
-fn tooltip_bounds(widget: HWND, anchor: Bounds, dpi: u32, text: &str) -> Option<Bounds> {
-    let monitor = unsafe { MonitorFromWindow(widget, MONITOR_DEFAULTTONEAREST) };
-    let mut info = MONITORINFO {
-        cbSize: size_of::<MONITORINFO>() as u32,
-        ..Default::default()
-    };
-    if unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 {
-        return None;
-    }
-    let work = info.rcMonitor;
-    let gap = scaled(6, dpi);
-    let width = scaled(365, dpi).min(work.right - work.left - 2 * gap);
-    let lines: usize = text
-        .split('\n')
-        .map(|line| line.chars().count().max(1).div_ceil(52))
-        .sum();
-    let height =
-        scaled((lines as i32 * 18 + 28).clamp(46, 320), dpi).min(work.bottom - work.top - 2 * gap);
-    if width <= 0 || height <= 0 {
-        return None;
-    }
-    let x = (anchor.x + anchor.width - width).clamp(work.left + gap, work.right - width - gap);
-    let top = anchor.y - height - gap;
-    let y = if top >= work.top + gap {
-        top
-    } else {
-        (anchor.y + anchor.height + gap).min(work.bottom - height - gap)
-    };
-    Some(Bounds {
-        x,
-        y,
-        width,
-        height,
-    })
 }
 
 #[derive(Default)]

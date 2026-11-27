@@ -36,16 +36,6 @@
             "core:event:allow-listen",
             "core:event:allow-unlisten"
           ]
-        },
-        {
-          "identifier": "widget-tooltip",
-          "description": "Read-only taskbar monitor tooltip",
-          "windows": ["widget-tooltip"],
-          "permissions": [
-            "allow-widget-snapshot",
-            "core:event:allow-listen",
-            "core:event:allow-unlisten"
-          ]
         }
       ]
     }

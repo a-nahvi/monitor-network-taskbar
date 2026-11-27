@@ -1,6 +1,6 @@
 # NetBar
 
-NetBar is a Windows 11 x64 taskbar monitor for upload and download activity. Tauri powers the taskbar widget, tray menu, hover details, and settings. The Rust backend reads adapter counters through Windows IP Helper.
+NetBar is a Windows 11 x64 taskbar monitor for upload and download activity. Tauri powers the taskbar widget, tray menu, and settings. The Rust backend reads adapter counters through Windows IP Helper.
 
 ## Install and upgrade
 
@@ -14,9 +14,7 @@ Portable copies can be run directly. To switch from a portable copy to an MSI in
 
 Double-click the widget or select **Settings** from the tray menu. **Display** controls the widget, colors, position, and startup. **Network** controls the adapter, units, and refresh interval. Manual adapter selection remains selected when the adapter is disconnected. Automatic selection prefers an active physical adapter and avoids counting VPN and physical traffic together.
 
-Upload is on the top row and download is on the bottom row. The optional graph covers the last minute with a shared scale. Unlock the position to drag the widget. The widget is anchored near the tray on the primary horizontal taskbar and hides for fullscreen applications or while the taskbar is out of view.
-
-The optional hover tooltip shows TCP and UDP traffic grouped by executable, including local and VPN traffic. Windows may require administrator access to start its temporary trace. The trace runs only while the tooltip is open. It processes byte counts and process IDs in memory.
+Feather icons mark upload on the top row and download on the bottom row. The optional graph covers the last minute with a shared scale. Unlock the position to drag the widget. The widget is anchored near the tray on the primary horizontal taskbar and hides for fullscreen applications or while the taskbar is out of view. [Feather Icons](https://feathericons.com/)
 
 ## Updates
 

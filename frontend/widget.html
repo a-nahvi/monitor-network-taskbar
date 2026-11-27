@@ -10,8 +10,18 @@
 <body>
   <main class="widget" aria-label="Network traffic" tabindex="0">
     <div class="readings">
-      <div class="reading upload"><span aria-label="Upload">↑</span><span id="upload">—</span></div>
-      <div class="reading download"><span aria-label="Download">↓</span><span id="download">—</span></div>
+      <div class="reading upload">
+        <svg class="reading-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <use href="icons/feather.svg#arrow-up"></use>
+        </svg>
+        <span id="upload">—</span>
+      </div>
+      <div class="reading download">
+        <svg class="reading-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <use href="icons/feather.svg#arrow-down"></use>
+        </svg>
+        <span id="download">—</span>
+      </div>
     </div>
     <canvas aria-hidden="true" hidden></canvas>
   </main>

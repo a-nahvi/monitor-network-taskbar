@@ -1,7 +1,5 @@
 const tauri = window.__TAURI__;
 const widget = document.querySelector('.widget');
-const tooltip = document.querySelector('.tooltip');
-const hoverDelay = 420;
 const graphTransition = 230;
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
@@ -14,20 +12,9 @@ async function subscribe(event, render) {
     render(snapshot);
   };
   await tauri.event.listen(event, ({ payload }) => accept(payload), {
-    target: widget ? 'widget' : 'widget-tooltip',
+    target: 'widget',
   });
   accept(await tauri.core.invoke('widget_snapshot'));
-}
-
-function useTooltip() {
-  const title = tooltip.querySelector('.tooltip-title');
-  const detail = tooltip.querySelector('.tooltip-details');
-  return subscribe('netbar-widget-tooltip', ({ tooltip: text }) => {
-    const [heading = '', ...lines] = text.split('\n');
-    title.textContent = heading;
-    detail.textContent = lines.join('\n').trimStart();
-    tooltip.hidden = !heading;
-  });
 }
 
 function useWidget() {
@@ -43,28 +30,10 @@ function useWidget() {
   let graphFrame = 0;
   let dragFrame = 0;
   let dragging = false;
-  let hoverTimer = 0;
-  let hovered = false;
 
   const act = (action) => {
     void tauri.core.invoke('widget_action', { action }).catch(() => {});
   };
-
-  function beginHover(event) {
-    if (dragging || hoverTimer || hovered || event.pointerType === 'touch') return;
-    hoverTimer = window.setTimeout(() => {
-      hoverTimer = 0;
-      hovered = true;
-      act('hover-enter');
-    }, hoverDelay);
-  }
-
-  function endHover() {
-    window.clearTimeout(hoverTimer);
-    hoverTimer = 0;
-    if (hovered) act('hover-leave');
-    hovered = false;
-  }
 
   function finishDrag(event, cancel = false) {
     if (!dragging) return;
@@ -77,27 +46,17 @@ function useWidget() {
     delete widget.dataset.dragging;
     act(cancel ? 'drag-cancel' : 'drag-end');
     if (widget.hasPointerCapture(event.pointerId)) widget.releasePointerCapture(event.pointerId);
-    if (!cancel && document.elementFromPoint(event.clientX, event.clientY)?.closest('.widget')) {
-      beginHover(event);
-    }
   }
 
-  widget.addEventListener('pointerenter', beginHover);
-  widget.addEventListener('pointerleave', endHover);
   widget.addEventListener('pointerdown', (event) => {
     if (!reading || reading.locked || !event.isPrimary || event.button !== 0) return;
     dragging = true;
     widget.dataset.dragging = 'true';
-    endHover();
     widget.setPointerCapture(event.pointerId);
     act('drag-begin');
   });
-  widget.addEventListener('pointermove', (event) => {
-    if (!dragging) {
-      beginHover(event);
-      return;
-    }
-    if (dragFrame) return;
+  widget.addEventListener('pointermove', () => {
+    if (!dragging || dragFrame) return;
     dragFrame = requestAnimationFrame(() => {
       dragFrame = 0;
       act('drag-move');
@@ -106,13 +65,9 @@ function useWidget() {
   widget.addEventListener('pointerup', finishDrag);
   widget.addEventListener('pointercancel', (event) => finishDrag(event, true));
   widget.addEventListener('lostpointercapture', (event) => finishDrag(event, true));
-  widget.addEventListener('dblclick', () => {
-    endHover();
-    act('settings');
-  });
+  widget.addEventListener('dblclick', () => act('settings'));
   widget.addEventListener('contextmenu', (event) => {
     event.preventDefault();
-    endHover();
     act('context');
   });
   widget.addEventListener('keydown', (event) => {
@@ -123,7 +78,6 @@ function useWidget() {
 
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) return;
-    endHover();
     if (dragging) {
       dragging = false;
       delete widget.dataset.dragging;
@@ -254,6 +208,5 @@ function useWidget() {
 }
 
 if (tauri) {
-  const startup = widget ? useWidget() : useTooltip();
-  startup.catch(console.error);
+  useWidget().catch(console.error);
 }

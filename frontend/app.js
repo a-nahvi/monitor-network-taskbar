@@ -10,14 +10,13 @@ const workspace = byId("workspace");
 const controls = {
   display: { graph: form.elements.layout, visible: byId("widget-visible"), width: byId("graph-width"),
     font: byId("text-size"), theme: byId("text-color"), locked: byId("position-locked") },
-  network: { adapter: byId("adapter"), bits: byId("speed-units"), interval: byId("interval"),
-    appUsage: byId("app-usage") },
+  network: { adapter: byId("adapter"), bits: byId("speed-units"), interval: byId("interval") },
   colors: { upColor: byId("upload-color"), downColor: byId("download-color") },
   startup: byId("start-windows"),
 };
 const defaultSettings = { schema: 1, interval: 1000, font: 12, offset: 0, locked: true,
   visible: true, theme: 0, bits: false, graph: false, width: 88, customUp: false, customDown: false,
-  upColor: 0xffab45, downColor: 0x42c2ff, appUsage: true, adapter: "" };
+  upColor: 0xffab45, downColor: 0x42c2ff, adapter: "" };
 
 let state;
 let settings;
@@ -96,7 +95,6 @@ function writeControls() {
   display.locked.checked = settings.locked;
   network.bits.value = settings.bits ? "bits" : "bytes";
   network.interval.value = settings.interval;
-  network.appUsage.checked = settings.appUsage;
   network.adapter.value = settings.adapter;
   colors.upColor.value = toHex(settings.upColor);
   colors.downColor.value = toHex(settings.downColor);
@@ -139,7 +137,6 @@ form.addEventListener("input", (event) => {
     locked: display.locked.checked,
     bits: network.bits.value === "bits",
     interval: Number(network.interval.value),
-    appUsage: network.appUsage.checked,
     adapter: network.adapter.value,
   });
   if (input === colors.upColor) {
@@ -404,7 +401,7 @@ async function initialize() {
   try {
     state = invoke ? await invoke("settings_state") : {
       settings: defaultSettings, defaults: defaultSettings, adapters: [], startupEnabled: false,
-      startupAllowed: false, updatesAllowed: false, repository: null, version: "2.1.0", preview: true,
+      startupAllowed: false, updatesAllowed: false, repository: null, version: "2.1.1", preview: true,
     };
     settings = { ...state.settings };
     savedSettings = { ...settings };

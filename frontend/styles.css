@@ -192,7 +192,7 @@ h1, h2, p, figure { margin: 0; }
 }
 .preview-rates { display: grid; gap: 1px; font-size: var(--widget-font, 13px); font-weight: 650; line-height: 1.25; font-variant-numeric: tabular-nums; }
 .preview-rates > span { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
-.preview-rates .icon { width: 12px; height: 12px; stroke-width: 2.1; }
+.preview-rates .icon { width: 13px; height: 13px; stroke-width: 2; }
 .rate-upload { color: var(--preview-upload, inherit); }
 .rate-download { color: var(--preview-download, inherit); }
 #preview-graph { display: block; width: 100%; height: 40px; }

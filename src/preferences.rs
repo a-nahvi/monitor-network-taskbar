@@ -28,7 +28,6 @@ pub struct Settings {
     pub custom_down: bool,
     pub up_color: u32,
     pub down_color: u32,
-    pub app_usage: bool,
     pub adapter: String,
 }
 
@@ -49,7 +48,6 @@ impl Default for Settings {
             custom_down: false,
             up_color: 0xFFAB45,
             down_color: 0x42C2FF,
-            app_usage: true,
             adapter: String::new(),
         }
     }
@@ -104,7 +102,6 @@ impl Settings {
             custom_down: int(w!("CustomDownloadColor"), 0) != 0,
             up_color: int(w!("UploadColor"), 0xFFAB45) as u32,
             down_color: int(w!("DownloadColor"), 0x42C2FF) as u32,
-            app_usage: int(w!("ShowApplicationUsage"), 1) != 0,
             adapter: String::from_utf16_lossy(&adapter[..chars as usize]),
         };
         settings.validate();
@@ -145,7 +142,6 @@ impl Settings {
             ("CustomDownloadColor", self.custom_down.into()),
             ("UploadColor", self.up_color as i32),
             ("DownloadColor", self.down_color as i32),
-            ("ShowApplicationUsage", self.app_usage.into()),
         ];
         for (key, value) in key_values
             .into_iter()

@@ -1,6 +1,5 @@
 #![windows_subsystem = "windows"]
 
-mod application;
 mod network;
 mod preferences;
 mod settings_window;
@@ -8,7 +7,6 @@ mod startup;
 mod update;
 mod widget;
 
-use application::ApplicationTraffic;
 use network::{Monitor, RateLabel, Rates};
 use preferences::Settings;
 use std::{
@@ -46,7 +44,6 @@ const MENU_ACTION: u32 = WM_APP + 6;
 const OPEN_SETTINGS: u32 = WM_APP + 7;
 const SAMPLE_TIMER: usize = 1;
 const PLACEMENT_TIMER: usize = 2;
-const TOOLTIP_TIMER: usize = 4;
 const NETWORK_TIMER: usize = 5;
 const HISTORY_POINTS: usize = 61;
 const WINDOW_CLASS: *const u16 = w!("NetBar.Monitor.v1");
@@ -251,11 +248,11 @@ fn run_monitor(
         );
         let notifications = network::Notifications::new(hwnd);
         {
-            let mut app = state.borrow_mut();
+            let app = &mut *state.borrow_mut();
             app.refresh_network();
             app.arm_sample();
             app.refresh_widget(true);
-            app.update_tray();
+            app.tray.ensure_icon(&app.ui, hwnd);
             timer(hwnd, PLACEMENT_TIMER, 2000, 150);
             if open_settings {
                 app.open_settings();
@@ -325,7 +322,6 @@ struct Tray {
     visible: CheckMenuItem<Wry>,
     locked: CheckMenuItem<Wry>,
     reset: MenuItem<Wry>,
-    tip: String,
 }
 
 const ACTION_SHOW: usize = 1;
@@ -391,7 +387,6 @@ impl Tray {
             visible,
             locked,
             reset,
-            tip: String::new(),
         })
     }
 
@@ -402,7 +397,6 @@ impl Tray {
         let destination = control as usize;
         let mut builder = TrayIconBuilder::with_id("netbar")
             .menu(&self.menu)
-            .tooltip("NetBar")
             .show_menu_on_left_click(false)
             .on_tray_icon_event(move |_, event| {
                 if let TrayIconEvent::Click {
@@ -431,17 +425,6 @@ impl Tray {
             .reset
             .set_enabled(settings.offset != 0 && !settings_open);
     }
-
-    fn set_tip(&mut self, text: String) {
-        if text != self.tip
-            && self
-                .icon
-                .as_ref()
-                .is_some_and(|icon| icon.set_tooltip(Some(&text)).is_ok())
-        {
-            self.tip = text;
-        }
-    }
 }
 
 struct Drag {
@@ -458,15 +441,12 @@ struct App {
     taskbar_created: u32,
     settings_open: bool,
     tray: Tray,
-    tray_updated: Instant,
     light_text: bool,
     widget: Widget,
     network: Monitor,
     last_network: Option<Instant>,
     rates: Rates,
     history: Vec<(f64, f64)>,
-    app_traffic: ApplicationTraffic,
-    hovering: bool,
     dragging: Option<Drag>,
     suspended: bool,
 }
@@ -491,15 +471,12 @@ impl App {
             taskbar_created: unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) },
             settings_open: false,
             tray,
-            tray_updated: Instant::now(),
             light_text,
             widget,
             network: Monitor::default(),
             last_network: None,
             rates: Rates::default(),
             history: Vec::new(),
-            app_traffic: ApplicationTraffic::new(),
-            hovering: false,
             dragging: None,
             suspended: false,
         })
@@ -545,12 +522,6 @@ impl App {
             self.history.push((rates.up, rates.down));
         }
         self.refresh_widget(false);
-        if self.hovering && !self.settings.app_usage {
-            self.refresh_tooltip();
-        }
-        if self.tray_updated.elapsed() >= Duration::from_secs(5) {
-            self.update_tray();
-        }
     }
 
     fn refresh_widget(&mut self, force: bool) {
@@ -588,16 +559,11 @@ impl App {
             },
             force,
         );
-        if !self.widget.visible() {
-            self.end_hover();
-        }
     }
 
     fn refresh_placement(&mut self) {
         self.widget.refresh_placement(self.hwnd);
-        if !self.widget.visible() {
-            self.end_hover();
-        }
+        self.tray.ensure_icon(&self.ui, self.hwnd);
     }
 
     fn arm_sample(&self) {
@@ -607,21 +573,7 @@ impl App {
         }
     }
 
-    fn update_tray(&mut self) {
-        self.tray_updated = Instant::now();
-        self.tray.ensure_icon(&self.ui, self.hwnd);
-        let tip = if self.rates.connected {
-            let up = RateLabel::new(self.rates.up, self.settings.bits);
-            let down = RateLabel::new(self.rates.down, self.settings.bits);
-            format!("NetBar\n↑ {}    ↓ {}", up.as_str(), down.as_str())
-        } else {
-            "NetBar\nNetwork adapter disconnected".into()
-        };
-        self.tray.set_tip(tip);
-    }
-
     fn open_settings(&mut self) {
-        self.end_hover();
         if let Err(error) =
             settings_window::open(&self.ui, self.path.clone(), self.hwnd as usize, self.custom)
         {
@@ -646,9 +598,6 @@ impl App {
         }
         let interval_changed = self.settings.interval != settings.interval;
         let adapter_changed = self.settings.adapter != settings.adapter;
-        if self.settings.app_usage != settings.app_usage {
-            self.end_hover();
-        }
         self.settings = settings;
         self.light_text = preferences::light_text(self.settings.theme);
         if interval_changed {
@@ -659,7 +608,6 @@ impl App {
         }
         self.tray.sync(&self.settings, self.settings_open);
         self.refresh_widget(true);
-        self.update_tray();
     }
 
     fn menu_action(&mut self, action: usize) {
@@ -687,13 +635,11 @@ impl App {
         match action {
             widget::ACTION_SETTINGS => self.open_settings(),
             widget::ACTION_CONTEXT => {
-                self.end_hover();
                 if let Some(window) = self.widget.window() {
                     let _ = window.popup_menu(&self.tray.menu);
                 }
             }
             widget::ACTION_DRAG_BEGIN if !self.settings.locked && !self.settings_open => {
-                self.end_hover();
                 self.dragging = Some(Drag {
                     origin: value as i32,
                     offset: self.settings.offset,
@@ -713,55 +659,8 @@ impl App {
             }
             widget::ACTION_DRAG_END => self.finish_drag(true),
             widget::ACTION_DRAG_CANCEL => self.finish_drag(false),
-            widget::ACTION_HOVER_ENTER if self.dragging.is_none() => self.show_tooltip(),
-            widget::ACTION_HOVER_LEAVE => self.end_hover(),
             _ => {}
         }
-    }
-
-    fn show_tooltip(&mut self) {
-        if self.hovering || !self.widget.visible() {
-            return;
-        }
-        self.hovering = true;
-        if self.settings.app_usage {
-            self.app_traffic.start();
-            unsafe {
-                timer(self.hwnd, TOOLTIP_TIMER, 1000, 100);
-            }
-        }
-        self.refresh_tooltip();
-    }
-
-    fn refresh_tooltip(&mut self) {
-        if !self.hovering {
-            return;
-        }
-        let up = RateLabel::new(self.rates.up, self.settings.bits);
-        let down = RateLabel::new(self.rates.down, self.settings.bits);
-        let mut text = if self.rates.connected {
-            format!("Upload {}   •   Download {}", up.as_str(), down.as_str())
-        } else {
-            "Network adapter disconnected".into()
-        };
-        if self.settings.app_usage {
-            self.app_traffic.start();
-            text.push_str("\n\n");
-            text.push_str(&self.app_traffic.summary(self.settings.bits));
-        }
-        self.widget.update_tooltip(&text);
-    }
-
-    fn end_hover(&mut self) {
-        if !self.hovering {
-            return;
-        }
-        self.hovering = false;
-        self.app_traffic.stop();
-        unsafe {
-            KillTimer(self.hwnd, TOOLTIP_TIMER);
-        }
-        self.widget.hide_tooltip();
     }
 
     fn finish_drag(&mut self, save: bool) {
@@ -782,14 +681,12 @@ impl App {
         unsafe {
             if message == self.taskbar_created {
                 self.refresh_placement();
-                self.update_tray();
                 return Some(0);
             }
             match message {
                 WM_TIMER => match word {
                     SAMPLE_TIMER if !self.suspended => self.sample(),
                     PLACEMENT_TIMER if !self.suspended => self.refresh_placement(),
-                    TOOLTIP_TIMER => self.refresh_tooltip(),
                     NETWORK_TIMER => {
                         KillTimer(self.hwnd, NETWORK_TIMER);
                         if !self.suspended {
@@ -809,7 +706,6 @@ impl App {
                     match word as u32 {
                         PBT_APMSUSPEND => {
                             self.suspended = true;
-                            self.end_hover();
                             KillTimer(self.hwnd, SAMPLE_TIMER);
                             self.refresh_widget(true);
                         }
@@ -836,7 +732,6 @@ impl App {
                 MENU_ACTION => self.menu_action(word),
                 widget::WIDGET_ACTION => self.widget_action(word, param),
                 WM_DESTROY => {
-                    self.end_hover();
                     PostQuitMessage(0);
                 }
                 _ => return None,
