@@ -332,11 +332,7 @@ unsafe fn initialize(hwnd: HWND, state: &mut Dialog) {
         SendDlgItemMessageW(hwnd, WIDTH, EM_SETLIMITTEXT, 3, 0);
         SendDlgItemMessageW(hwnd, REPOSITORY, EM_SETLIMITTEXT, 140, 0);
         SendDlgItemMessageW(hwnd, TOKEN, EM_SETLIMITTEXT, 256, 0);
-        let repository = if state.custom {
-            None
-        } else {
-            update::configured_repository()
-        };
+        let repository = update::configured_repository();
         set_text(hwnd, REPOSITORY, repository.as_deref().unwrap_or(""));
         for id in [SAVE_ACCESS, CLEAR_ACCESS, REPOSITORY, TOKEN] {
             EnableWindow(GetDlgItem(hwnd, id), i32::from(!state.custom));
