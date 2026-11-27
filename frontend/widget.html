@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NetBar taskbar</title>
+  <link rel="stylesheet" href="widget.css">
+  <script type="module" src="widget.js"></script>
+</head>
+<body>
+  <main class="widget" aria-label="Network traffic" tabindex="0">
+    <div class="readings">
+      <div class="reading upload"><span aria-label="Upload">↑</span><span id="upload">—</span></div>
+      <div class="reading download"><span aria-label="Download">↓</span><span id="download">—</span></div>
+    </div>
+    <canvas aria-hidden="true" hidden></canvas>
+  </main>
+</body>
+</html>

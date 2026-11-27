@@ -1,8 +1,8 @@
 [package]
 name = "netbar"
-version = "2.0.0"
+version = "2.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.90"
 default-run = "NetBar"
 
 [[bin]]
@@ -10,8 +10,10 @@ name = "NetBar"
 path = "src/main.rs"
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+tauri = { version = "=2.12.7", default-features = false, features = ["wry", "custom-protocol", "tray-icon"] }
 tempfile = "3"
 zeroize = "1"
 windows-sys = { version = "0.61.2", features = [
@@ -48,7 +50,7 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 
 [build-dependencies]
-embed-resource = "3.0.11"
+tauri-build = { version = "=2.7.6", features = ["codegen"] }
 
 [profile.release]
 codegen-units = 1

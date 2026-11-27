@@ -91,10 +91,10 @@ impl ApplicationTraffic {
     }
 
     pub fn stop(&mut self) {
-        if let Some(active) = &self.collection {
-            if !active.shared.stopping.swap(true, Ordering::AcqRel) {
-                let _ = active.cancel.send(());
-            }
+        if let Some(active) = &self.collection
+            && !active.shared.stopping.swap(true, Ordering::AcqRel)
+        {
+            let _ = active.cancel.send(());
         }
         self.failed = false;
     }
@@ -325,7 +325,7 @@ fn byte_prefix(record: &EVENT_RECORD) -> bool {
 
 fn property_matches(field: &EVENT_PROPERTY_INFO, metadata: &[u16], expected: &[u8]) -> bool {
     let offset = field.NameOffset as usize;
-    if field.Flags != 0 || offset % 2 != 0 {
+    if field.Flags != 0 || !offset.is_multiple_of(2) {
         return false;
     }
     let start = offset / 2;

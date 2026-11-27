@@ -1,4 +1,5 @@
 use crate::{wide, wide_path};
+use serde::{Deserialize, Serialize};
 use std::{
     fs, io,
     path::{Path, PathBuf},
@@ -10,7 +11,8 @@ use windows_sys::Win32::{
 };
 use windows_sys::w;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Settings {
     pub schema: i32,
     pub interval: u32,

@@ -194,14 +194,15 @@ impl Monitor {
         };
         if let Some((time, up, down)) = previous {
             let elapsed = now.duration_since(time);
-            if !elapsed.is_zero() && elapsed < Duration::from_secs(30) {
-                if let (Some(up), Some(down)) = (
+            if !elapsed.is_zero()
+                && elapsed < Duration::from_secs(30)
+                && let (Some(up), Some(down)) = (
                     row.OutOctets.checked_sub(up),
                     row.InOctets.checked_sub(down),
-                ) {
-                    rates.up = up as f64 / elapsed.as_secs_f64();
-                    rates.down = down as f64 / elapsed.as_secs_f64();
-                }
+                )
+            {
+                rates.up = up as f64 / elapsed.as_secs_f64();
+                rates.down = down as f64 / elapsed.as_secs_f64();
             }
         }
         rates

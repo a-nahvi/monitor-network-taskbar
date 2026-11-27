@@ -1,598 +1,436 @@
-use crate::{network::Adapter, preferences::Settings, startup, update, wide};
+use crate::{
+    network,
+    preferences::{self, Settings},
+    startup, update, wide,
+};
+use serde::Serialize;
 use std::{
-    cell::RefCell,
     io,
     path::PathBuf,
-    ptr::{null, null_mut},
-    sync::mpsc::{self, Receiver},
-    thread,
+    ptr::null_mut,
+    sync::{
+        Arc, Mutex, MutexGuard,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+};
+use tauri::{
+    AppHandle, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent, Wry,
+    webview::NewWindowResponse,
 };
 use windows_sys::{
     Win32::{
-        Foundation::*,
-        Graphics::Gdi::*,
-        System::LibraryLoader::GetModuleHandleW,
+        Foundation::HWND,
         UI::{
-            Controls::{Dialogs::*, *},
-            Input::KeyboardAndMouse::EnableWindow,
-            WindowsAndMessaging::*,
+            Shell::ShellExecuteW,
+            WindowsAndMessaging::{GetWindowThreadProcessId, PostMessageW, SW_SHOWNORMAL},
         },
     },
     w,
 };
 use zeroize::Zeroizing;
 
-const TAB: i32 = 217;
-const DISPLAY: i32 = 302;
-const WIDTH: i32 = 304;
-const FONT: i32 = 307;
-const THEME: i32 = 309;
-const ADAPTER: i32 = 402;
-const UNITS: i32 = 404;
-const INTERVAL: i32 = 406;
-const CHECK_UPDATE: i32 = 501;
-const INSTALL_UPDATE: i32 = 502;
-const UPDATE_STATUS: i32 = 503;
-const REPOSITORY: i32 = 506;
-const TOKEN: i32 = 508;
-const SAVE_ACCESS: i32 = 509;
-const CLEAR_ACCESS: i32 = 510;
-const JOB_TIMER: usize = 1;
-const DIALOG_USER: i32 = (size_of::<LRESULT>() + size_of::<DLGPROC>()) as i32;
+const LABEL: &str = "settings";
 
-type Save = Box<dyn Fn(Settings, Option<bool>) -> Result<(), String> + Send>;
+#[derive(Default)]
+struct SettingsRuntime {
+    window_gate: Mutex<()>,
+    session: Mutex<Option<Session>>,
+    counter: AtomicU64,
+    installing: Arc<AtomicBool>,
+}
 
-struct Dialog {
-    settings: Settings,
-    adapters: Vec<Adapter>,
-    custom: bool,
-    installed: bool,
+struct Session {
+    id: u64,
     owner: usize,
-    save: Save,
-    font: HFONT,
-    job: Option<Receiver<Job>>,
-    available: Option<update::AvailableUpdate>,
-}
-
-enum Job {
-    Check(Result<Option<update::AvailableUpdate>, String>),
-    Install(Result<(), String>),
-}
-
-pub fn open(
-    owner: HWND,
-    settings: Settings,
-    adapters: Vec<Adapter>,
+    path: PathBuf,
     custom: bool,
-    save: Save,
-) -> std::io::Result<()> {
-    let owner = owner as usize;
-    thread::Builder::new()
-        .name("NetBar settings".into())
-        .spawn(move || {
-            let result = run_dialog(owner, settings, adapters, custom, save);
-            unsafe {
-                if result.is_err() {
-                    MessageBoxW(
-                        null_mut(),
-                        w!("The settings window could not open."),
-                        w!("NetBar"),
-                        MB_OK | MB_ICONERROR,
-                    );
-                }
-                PostMessageW(owner as HWND, crate::SETTINGS_CLOSED, 0, 0);
-            }
-        })?;
+    updates_allowed: bool,
+    release: Option<update::AvailableUpdate>,
+    update_epoch: u64,
+}
+
+struct InstallLease(Arc<AtomicBool>);
+
+impl Drop for InstallLease {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SettingsSnapshot {
+    settings: Settings,
+    defaults: Settings,
+    adapters: Vec<AdapterOption>,
+    startup_enabled: bool,
+    startup_allowed: bool,
+    updates_allowed: bool,
+    repository: Option<String>,
+    version: &'static str,
+    preview: bool,
+}
+
+#[derive(Serialize)]
+struct AdapterOption {
+    id: String,
+    name: String,
+    connected: bool,
+}
+
+#[derive(Serialize)]
+struct UpdateResult {
+    version: Option<String>,
+}
+
+pub fn builder() -> tauri::Builder<Wry> {
+    tauri::Builder::default()
+        .manage(SettingsRuntime::default())
+        .invoke_handler(tauri::generate_handler![
+            settings_state,
+            save_settings,
+            configure_updates,
+            check_updates,
+            install_update,
+            open_token_page,
+            close_settings,
+            crate::widget::widget_snapshot,
+            crate::widget::widget_action,
+        ])
+}
+
+pub fn context() -> tauri::Context<Wry> {
+    tauri::tauri_build_context!()
+}
+
+pub fn open(app: &AppHandle, path: PathBuf, owner: usize, custom: bool) -> io::Result<()> {
+    let runtime = app.state::<SettingsRuntime>();
+    let _gate = runtime
+        .window_gate
+        .lock()
+        .map_err(|_| io::Error::other("NetBar settings are unavailable"))?;
+    if let Some(window) = app.get_webview_window(LABEL) {
+        window.unminimize().map_err(io::Error::other)?;
+        window.show().map_err(io::Error::other)?;
+        return window.set_focus().map_err(io::Error::other);
+    }
+
+    let id = runtime.counter.fetch_add(1, Ordering::Relaxed);
+    {
+        let mut state = runtime
+            .session
+            .lock()
+            .map_err(|_| io::Error::other("NetBar settings are unavailable"))?;
+        *state = Some(Session {
+            id,
+            owner,
+            path,
+            custom,
+            updates_allowed: !custom && preferences::installed(),
+            release: None,
+            update_epoch: 0,
+        });
+    }
+
+    let creation = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("index.html".into()))
+        .title("NetBar settings")
+        .inner_size(940.0, 680.0)
+        .min_inner_size(740.0, 560.0)
+        .center()
+        .visible(false)
+        .on_navigation(|url| {
+            matches!(
+                (url.scheme(), url.host_str()),
+                ("http", Some("tauri.localhost")) | ("tauri", Some("localhost"))
+            )
+        })
+        .on_new_window(|_, _| NewWindowResponse::Deny)
+        .build();
+
+    let window = match creation {
+        Ok(window) => window,
+        Err(error) => {
+            clear_session(&runtime, id);
+            return Err(io::Error::other(error));
+        }
+    };
+    let app = app.clone();
+    let hwnd = window.hwnd().map_or(0, |handle| handle.0 as usize);
+    window.on_window_event(move |event| {
+        if matches!(event, WindowEvent::Destroyed) {
+            clear_session(&app.state::<SettingsRuntime>(), id);
+            notify_parent(owner, crate::SETTINGS_CLOSED, hwnd);
+        }
+    });
+    if let Err(error) = window.show() {
+        let _ = window.destroy();
+        return Err(io::Error::other(error));
+    }
+    let _ = window.set_focus();
+    notify_parent(owner, crate::SETTINGS_OPENED, hwnd);
     Ok(())
 }
 
-pub fn preview(path: PathBuf) -> io::Result<()> {
+fn clear_session(runtime: &SettingsRuntime, id: u64) {
+    if let Ok(mut session) = runtime.session.lock()
+        && session.as_ref().is_some_and(|session| session.id == id)
+    {
+        *session = None;
+    }
+}
+
+fn notify_parent(owner: usize, message: u32, value: usize) {
+    if owner == 0 {
+        return;
+    }
+    let window = owner as HWND;
+    let mut process = 0;
+    unsafe {
+        GetWindowThreadProcessId(window, &mut process);
+        if process == std::process::id() {
+            PostMessageW(window, message, value, 0);
+        }
+    }
+}
+
+fn session<'a>(
+    window: &WebviewWindow,
+    runtime: &'a SettingsRuntime,
+) -> Result<MutexGuard<'a, Option<Session>>, String> {
+    if window.label() != LABEL {
+        return Err("Settings commands are available only in NetBar settings.".into());
+    }
+    let session = runtime
+        .session
+        .lock()
+        .map_err(|_| "NetBar settings are unavailable.")?;
+    if session.is_none() {
+        return Err("NetBar settings are closed.".into());
+    }
+    Ok(session)
+}
+
+#[tauri::command]
+fn settings_state(
+    window: WebviewWindow,
+    state: State<'_, SettingsRuntime>,
+) -> Result<SettingsSnapshot, String> {
+    let (path, custom, updates_allowed, preview) = {
+        let session = session(&window, &state)?;
+        let session = session.as_ref().expect("settings session checked");
+        (
+            session.path.clone(),
+            session.custom,
+            session.updates_allowed,
+            session.owner == 0,
+        )
+    };
     let settings = Settings::load(&path);
-    run_dialog(
-        0,
-        settings,
-        crate::network::adapters(),
-        true,
-        Box::new(move |settings, _| {
-            settings
-                .save(&path)
-                .map_err(|error| format!("Could not save the test settings. {error}"))
-        }),
-    )
-}
-
-fn run_dialog(
-    owner: usize,
-    settings: Settings,
-    adapters: Vec<Adapter>,
-    custom: bool,
-    save: Save,
-) -> io::Result<()> {
-    let state = RefCell::new(Dialog {
-        settings,
-        adapters,
-        custom,
-        installed: !custom && crate::preferences::installed(),
-        owner,
-        save,
-        font: null_mut(),
-        job: None,
-        available: None,
-    });
-    unsafe {
-        let controls = INITCOMMONCONTROLSEX {
-            dwSize: size_of::<INITCOMMONCONTROLSEX>() as u32,
-            dwICC: ICC_TAB_CLASSES,
-        };
-        InitCommonControlsEx(&controls);
-        let result = DialogBoxParamW(
-            GetModuleHandleW(null()),
-            210usize as *const u16,
-            null_mut(),
-            Some(proc),
-            (&raw const state) as isize,
-        );
-        let error = (result == -1).then(io::Error::last_os_error);
-        let state = state.into_inner();
-        if !state.font.is_null() {
-            DeleteObject(state.font);
-        }
-        error.map_or(Ok(()), Err)
-    }
-}
-
-unsafe extern "system" fn proc(hwnd: HWND, message: u32, word: WPARAM, param: LPARAM) -> isize {
-    if message == WM_INITDIALOG {
-        let state = unsafe { &*(param as *const RefCell<Dialog>) };
-        unsafe {
-            initialize(hwnd, &mut state.borrow_mut());
-            SetWindowLongPtrW(hwnd, DIALOG_USER, param);
-        }
-        return 1;
-    }
-    // Standard controls may send synchronous notifications while being updated.
-    let command = (word & 0xffff) as i32;
-    let notify = (word >> 16) as u16;
-    if message == WM_COMMAND
-        && notify != 0
-        && (command != DISPLAY || notify as u32 != CBN_SELCHANGE)
+    let mut adapters = network::adapters();
+    if !settings.adapter.is_empty()
+        && !adapters
+            .iter()
+            .any(|adapter| adapter.id.eq_ignore_ascii_case(&settings.adapter))
     {
-        return 0;
+        adapters.push(network::Adapter::missing(settings.adapter.clone()));
     }
-    if message == WM_NOTIFY
-        && (param == 0 || unsafe { (*(param as *const NMHDR)).code } != TCN_SELCHANGE)
-    {
-        return 0;
-    }
-    if ![WM_NOTIFY, WM_COMMAND, WM_TIMER, WM_CLOSE].contains(&message) {
-        return 0;
-    }
-    let state = unsafe { GetWindowLongPtrW(hwnd, DIALOG_USER) } as *const RefCell<Dialog>;
-    let Some(state) = (unsafe { state.as_ref() }) else {
-        return 0;
-    };
-    let Ok(mut state) = state.try_borrow_mut() else {
-        return 0;
-    };
-    let state = &mut *state;
-    unsafe {
-        match message {
-            WM_NOTIFY => page(hwnd),
-            WM_TIMER if word == JOB_TIMER => state.finish_job(hwnd),
-            WM_CLOSE | WM_COMMAND if message == WM_CLOSE || command == IDCANCEL => {
-                EndDialog(hwnd, 0);
-            }
-            WM_COMMAND => match command {
-                IDOK => {
-                    let settings = state.read(hwnd);
-                    let startup = (!state.custom).then(|| checked(hwnd, 316));
-                    match (state.save)(settings, startup) {
-                        Ok(()) => {
-                            EndDialog(hwnd, 1);
-                        }
-                        Err(message) => {
-                            MessageBoxW(
-                                hwnd,
-                                wide(&message).as_ptr(),
-                                w!("NetBar settings"),
-                                MB_OK | MB_ICONERROR,
-                            );
-                        }
-                    }
-                }
-                DISPLAY => update_display_fields(hwnd),
-                310 => choose_color(
-                    hwnd,
-                    &mut state.settings.up_color,
-                    &mut state.settings.custom_up,
-                ),
-                311 => choose_color(
-                    hwnd,
-                    &mut state.settings.down_color,
-                    &mut state.settings.custom_down,
-                ),
-                312 => {
-                    state.settings.custom_up = false;
-                    state.settings.custom_down = false;
-                    state.settings.up_color = Settings::default().up_color;
-                    state.settings.down_color = Settings::default().down_color;
-                }
-                315 => {
-                    state.settings.offset = 0;
-                    EnableWindow(GetDlgItem(hwnd, 315), 0);
-                }
-                218 => {
-                    state.settings = Settings {
-                        schema: state.settings.schema,
-                        ..Settings::default()
-                    };
-                    state.fill(hwnd);
-                }
-                SAVE_ACCESS | CLEAR_ACCESS => {
-                    let repository = get_text(hwnd, REPOSITORY);
-                    let token = Zeroizing::new(get_text(hwnd, TOKEN));
-                    let result = update::configure(
-                        repository.trim(),
-                        if command == CLEAR_ACCESS {
-                            Some("")
-                        } else if token.is_empty() {
-                            None
-                        } else {
-                            Some(token.trim())
-                        },
-                    );
-                    SetDlgItemTextW(hwnd, TOKEN, w!(""));
-                    state.available = None;
-                    state.buttons(hwnd, false);
-                    set_text(
-                        hwnd,
-                        UPDATE_STATUS,
-                        &result
-                            .map(|()| {
-                                if command == CLEAR_ACCESS {
-                                    "GitHub token cleared.".to_owned()
-                                } else {
-                                    "GitHub access saved.".to_owned()
-                                }
-                            })
-                            .unwrap_or_else(|error| error),
-                    );
-                }
-                CHECK_UPDATE if state.job.is_none() => state.launch_job(hwnd, false),
-                INSTALL_UPDATE if state.job.is_none() => state.launch_job(hwnd, true),
-                _ => return 0,
-            },
-            _ => return 0,
-        }
-    }
-    1
-}
 
-unsafe fn initialize(hwnd: HWND, state: &mut Dialog) {
-    unsafe {
-        let dpi = windows_sys::Win32::UI::HiDpi::GetDpiForWindow(hwnd).max(96);
-        state.font = CreateFontW(
-            -(25 * dpi as i32 / 96),
-            0,
-            0,
-            0,
-            FW_SEMIBOLD as i32,
-            0,
-            0,
-            0,
-            DEFAULT_CHARSET as u32,
-            OUT_DEFAULT_PRECIS as u32,
-            CLIP_DEFAULT_PRECIS as u32,
-            CLEARTYPE_QUALITY as u32,
-            DEFAULT_PITCH as u32,
-            w!("Segoe UI"),
-        );
-        if !state.font.is_null() {
-            SendDlgItemMessageW(hwnd, 215, WM_SETFONT, state.font as usize, 1);
-        }
-        set_text(hwnd, 216, concat!("Version ", env!("CARGO_PKG_VERSION")));
-        for (index, title) in [w!("Taskbar"), w!("Network"), w!("Updates")]
+    Ok(SettingsSnapshot {
+        defaults: Settings {
+            schema: settings.schema,
+            ..Settings::default()
+        },
+        settings,
+        adapters: adapters
             .into_iter()
-            .enumerate()
-        {
-            let item = TCITEMW {
-                mask: TCIF_TEXT,
-                pszText: title.cast_mut(),
-                ..Default::default()
-            };
-            SendDlgItemMessageW(
-                hwnd,
-                TAB,
-                TCM_INSERTITEMW,
-                index,
-                (&raw const item) as isize,
-            );
+            .map(|adapter| AdapterOption {
+                id: adapter.id,
+                name: adapter.name,
+                connected: adapter.connected,
+            })
+            .collect(),
+        startup_enabled: !custom && startup::enabled(),
+        startup_allowed: !custom,
+        updates_allowed,
+        repository: update::configured_repository(),
+        version: env!("CARGO_PKG_VERSION"),
+        preview,
+    })
+}
+
+#[tauri::command]
+fn save_settings(
+    window: WebviewWindow,
+    state: State<'_, SettingsRuntime>,
+    mut settings: Settings,
+    startup_enabled: Option<bool>,
+) -> Result<(), String> {
+    let session = session(&window, &state)?;
+    let session = session.as_ref().expect("settings session checked");
+    let previous = Settings::load(&session.path);
+    settings.schema = previous.schema;
+    if settings.adapter != previous.adapter
+        && !settings.adapter.is_empty()
+        && !valid_adapter_id(&settings.adapter)
+    {
+        return Err("Select a valid network adapter.".into());
+    }
+    settings.validate();
+    let startup_change =
+        startup_enabled.filter(|desired| !session.custom && *desired != startup::enabled());
+    if let Some(enabled) = startup_change {
+        startup::set_enabled(enabled)
+            .map_err(|error| format!("Could not change Windows startup. {error}"))?;
+    }
+    if let Err(error) = settings.save(&session.path) {
+        if let Some(enabled) = startup_change {
+            let _ = startup::set_enabled(!enabled);
         }
-        insert_choices(hwnd, DISPLAY, &["Numbers", "Graph"]);
-        insert_choices(hwnd, FONT, &["Small", "Normal", "Large"]);
-        insert_choices(hwnd, THEME, &["Follow Windows", "Light text", "Dark text"]);
-        insert_choices(hwnd, UNITS, &["Bytes per second", "Bits per second"]);
-        insert_choices(hwnd, INTERVAL, &["1 second", "2 seconds", "5 seconds"]);
-        insert_choices(hwnd, ADAPTER, &["Automatic"]);
-        if !state.settings.adapter.is_empty()
-            && !state
-                .adapters
-                .iter()
-                .any(|item| item.id.eq_ignore_ascii_case(&state.settings.adapter))
-        {
-            let missing = Adapter::missing(state.settings.adapter.clone());
-            state.adapters.push(missing);
-        }
-        for item in &state.adapters {
-            insert_choices(hwnd, ADAPTER, &[&item.name]);
-        }
-        state.fill(hwnd);
-        check(hwnd, 316, !state.custom && startup::enabled());
-        EnableWindow(GetDlgItem(hwnd, 316), i32::from(!state.custom));
-        SendDlgItemMessageW(hwnd, WIDTH, EM_SETLIMITTEXT, 3, 0);
-        SendDlgItemMessageW(hwnd, REPOSITORY, EM_SETLIMITTEXT, 140, 0);
-        SendDlgItemMessageW(hwnd, TOKEN, EM_SETLIMITTEXT, 256, 0);
-        let repository = update::configured_repository();
-        set_text(hwnd, REPOSITORY, repository.as_deref().unwrap_or(""));
-        for id in [SAVE_ACCESS, CLEAR_ACCESS, REPOSITORY, TOKEN] {
-            EnableWindow(GetDlgItem(hwnd, id), i32::from(!state.custom));
-        }
-        state.buttons(hwnd, false);
-        set_text(
-            hwnd,
-            UPDATE_STATUS,
-            if state.installed {
-                "Check for the latest available version."
-            } else {
-                "Install NetBar with its MSI to update from this window."
-            },
-        );
-        page(hwnd);
-        PostMessageW(
-            state.owner as HWND,
-            crate::SETTINGS_OPENED,
-            hwnd as usize,
-            0,
-        );
+        return Err(format!("Could not save NetBar settings. {error}"));
+    }
+    notify_parent(session.owner, crate::SETTINGS_RELOAD, 0);
+    Ok(())
+}
+
+fn valid_adapter_id(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 38
+        && bytes.iter().enumerate().all(|(index, byte)| match index {
+            0 => *byte == b'{',
+            37 => *byte == b'}',
+            9 | 14 | 19 | 24 => *byte == b'-',
+            _ => byte.is_ascii_hexdigit(),
+        })
+}
+
+fn require_updates(session: &Session) -> Result<(), String> {
+    if session.updates_allowed {
+        Ok(())
+    } else {
+        Err("Install NetBar with its MSI to update from this window.".into())
     }
 }
 
-impl Dialog {
-    unsafe fn fill(&self, hwnd: HWND) {
-        let s = &self.settings;
-        unsafe {
-            for (id, selection) in [
-                (DISPLAY, s.graph as usize),
-                (
-                    FONT,
-                    match s.font {
-                        11 => 0,
-                        14 => 2,
-                        _ => 1,
-                    },
-                ),
-                (THEME, s.theme as usize),
-                (UNITS, s.bits as usize),
-                (
-                    INTERVAL,
-                    match s.interval {
-                        2000 => 1,
-                        5000 => 2,
-                        _ => 0,
-                    },
-                ),
-                (
-                    ADAPTER,
-                    self.adapters
-                        .iter()
-                        .position(|item| item.id.eq_ignore_ascii_case(&s.adapter))
-                        .map_or(0, |index| index + 1),
-                ),
-            ] {
-                SendDlgItemMessageW(hwnd, id, CB_SETCURSEL, selection, 0);
-            }
-            set_text(hwnd, WIDTH, &s.width.to_string());
-            check(hwnd, 313, s.visible);
-            check(hwnd, 314, s.locked);
-            check(hwnd, 407, s.app_usage);
-            EnableWindow(GetDlgItem(hwnd, 315), i32::from(s.offset != 0));
-            update_display_fields(hwnd);
-        }
+#[tauri::command]
+fn configure_updates(
+    window: WebviewWindow,
+    state: State<'_, SettingsRuntime>,
+    token: String,
+) -> Result<(), String> {
+    let token = Zeroizing::new(token);
+    let mut session = session(&window, &state)?;
+    let session = session.as_mut().expect("settings session checked");
+    require_updates(session)?;
+    if state.installing.load(Ordering::Acquire) {
+        return Err("An update is already being installed.".into());
     }
-
-    unsafe fn read(&self, hwnd: HWND) -> Settings {
-        unsafe {
-            let mut settings = self.settings.clone();
-            settings.graph = selected(hwnd, DISPLAY) == 1;
-            settings.width = get_text(hwnd, WIDTH).parse().unwrap_or(settings.width);
-            settings.font = match selected(hwnd, FONT) {
-                0 => 11,
-                2 => 14,
-                _ => 12,
-            };
-            settings.theme = selected(hwnd, THEME) as i32;
-            settings.visible = checked(hwnd, 313);
-            settings.locked = checked(hwnd, 314);
-            settings.app_usage = checked(hwnd, 407);
-            settings.bits = selected(hwnd, UNITS) == 1;
-            settings.interval = match selected(hwnd, INTERVAL) {
-                1 => 2000,
-                2 => 5000,
-                _ => 1000,
-            };
-            settings.adapter = usize::try_from(selected(hwnd, ADAPTER) - 1)
-                .ok()
-                .and_then(|index| self.adapters.get(index))
-                .map(|item| item.id.clone())
-                .unwrap_or_default();
-            settings.validate();
-            settings
-        }
-    }
-
-    unsafe fn buttons(&self, hwnd: HWND, busy: bool) {
-        unsafe {
-            EnableWindow(
-                GetDlgItem(hwnd, CHECK_UPDATE),
-                i32::from(!busy && self.installed),
-            );
-            EnableWindow(
-                GetDlgItem(hwnd, INSTALL_UPDATE),
-                i32::from(!busy && self.installed && self.available.is_some()),
-            );
-            for id in [REPOSITORY, TOKEN, SAVE_ACCESS, CLEAR_ACCESS] {
-                EnableWindow(GetDlgItem(hwnd, id), i32::from(!busy && !self.custom));
-            }
-        }
-    }
-
-    unsafe fn launch_job(&mut self, hwnd: HWND, install: bool) {
-        if !self.installed {
-            return;
-        }
-        if install && self.available.is_none() {
-            return;
-        }
-        unsafe {
-            let (tx, rx) = mpsc::channel();
-            let release = self.available.take();
-            let job = thread::Builder::new()
-                .name("NetBar update".into())
-                .spawn(move || {
-                    let event = match (install, release) {
-                        (true, Some(release)) => Job::Install(update::install(&release)),
-                        _ => Job::Check(update::check()),
-                    };
-                    let _ = tx.send(event);
-                });
-            if job.is_ok() {
-                self.job = Some(rx);
-                self.buttons(hwnd, true);
-                set_text(
-                    hwnd,
-                    UPDATE_STATUS,
-                    if install {
-                        "Downloading and verifying the installer…"
-                    } else {
-                        "Checking GitHub…"
-                    },
-                );
-                SetTimer(hwnd, JOB_TIMER, 125, None);
-            } else {
-                set_text(
-                    hwnd,
-                    UPDATE_STATUS,
-                    "The update could not start. Try again.",
-                );
-            }
-        }
-    }
-
-    unsafe fn finish_job(&mut self, hwnd: HWND) {
-        let Some(job) = &self.job else {
-            return;
-        };
-        let result = match job.try_recv() {
-            Ok(result) => result,
-            Err(mpsc::TryRecvError::Empty) => return,
-            Err(mpsc::TryRecvError::Disconnected) => {
-                Job::Check(Err("The update could not finish. Try again.".into()))
-            }
-        };
-        self.job = None;
-        let text = match result {
-            Job::Check(Ok(Some(release))) => {
-                let text = format!(
-                    "NetBar {} is available. Save any open settings before installing.",
-                    release.version
-                );
-                self.available = Some(release);
-                text
-            }
-            Job::Check(Ok(None)) => "NetBar is up to date.".into(),
-            Job::Install(Ok(())) => "The verified installer has started.".into(),
-            Job::Check(Err(error)) | Job::Install(Err(error)) => error,
-        };
-        unsafe {
-            KillTimer(hwnd, JOB_TIMER);
-            self.buttons(hwnd, false);
-            set_text(hwnd, UPDATE_STATUS, &text);
-        }
-    }
+    let repository =
+        update::configured_repository().ok_or("GitHub release access is unavailable.")?;
+    update::configure(&repository, Some(token.as_str()))?;
+    session.release = None;
+    session.update_epoch = session.update_epoch.wrapping_add(1);
+    Ok(())
 }
 
-unsafe fn choose_color(hwnd: HWND, rgb: &mut u32, active: &mut bool) {
-    let swap = |value: u32| ((value & 0xff) << 16) | (value & 0xff00) | ((value >> 16) & 0xff);
-    let mut custom = [0u32; 16];
-    let mut dialog = CHOOSECOLORW {
-        lStructSize: size_of::<CHOOSECOLORW>() as u32,
-        hwndOwner: hwnd,
-        rgbResult: swap(*rgb),
-        lpCustColors: custom.as_mut_ptr(),
-        Flags: CC_RGBINIT | CC_FULLOPEN,
-        ..Default::default()
+#[tauri::command]
+async fn check_updates(
+    window: WebviewWindow,
+    state: State<'_, SettingsRuntime>,
+) -> Result<UpdateResult, String> {
+    let (id, epoch) = {
+        let mut session = session(&window, &state)?;
+        let session = session.as_mut().expect("settings session checked");
+        require_updates(session)?;
+        if state.installing.load(Ordering::Acquire) {
+            return Err("An update is already being installed.".into());
+        }
+        session.release = None;
+        session.update_epoch = session.update_epoch.wrapping_add(1);
+        (session.id, session.update_epoch)
     };
-    if unsafe { ChooseColorW(&mut dialog) } != 0 {
-        *active = true;
-        *rgb = swap(dialog.rgbResult);
+    let result = tauri::async_runtime::spawn_blocking(update::check)
+        .await
+        .map_err(|error| error.to_string())??;
+    let mut session = session(&window, &state)?;
+    let session = session.as_mut().expect("settings session checked");
+    if session.id != id || session.update_epoch != epoch {
+        return Err("Check for updates again after configuring GitHub access.".into());
     }
+    let version = result.as_ref().map(|release| release.version.clone());
+    session.release = result;
+    Ok(UpdateResult { version })
 }
 
-unsafe fn page(hwnd: HWND) {
-    unsafe {
-        let selected = SendDlgItemMessageW(hwnd, TAB, TCM_GETCURSEL, 0, 0);
-        for (page, ids) in [301..=316, 401..=408, 501..=510].into_iter().enumerate() {
-            for id in ids {
-                ShowWindow(
-                    GetDlgItem(hwnd, id),
-                    if page as isize == selected {
-                        SW_SHOWNA
-                    } else {
-                        SW_HIDE
-                    },
-                );
-            }
+#[tauri::command]
+async fn install_update(
+    window: WebviewWindow,
+    state: State<'_, SettingsRuntime>,
+) -> Result<(), String> {
+    let (id, release, lease) = {
+        let mut session = session(&window, &state)?;
+        let session = session.as_mut().expect("settings session checked");
+        require_updates(session)?;
+        state
+            .installing
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| "An update is already being installed.")?;
+        let lease = InstallLease(Arc::clone(&state.installing));
+        let release = session
+            .release
+            .take()
+            .ok_or("Check for an update before installing it.")?;
+        (session.id, release, lease)
+    };
+    let attempted = release.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let _lease = lease;
+        update::install(&attempted)
+    })
+    .await
+    .map_err(|error| error.to_string())
+    .and_then(|result| result);
+    if let Ok(mut session) = session(&window, &state)
+        && let Some(session) = session.as_mut().filter(|session| session.id == id)
+    {
+        if result.is_err() {
+            session.release = Some(release);
         }
     }
+    result
 }
 
-unsafe fn update_display_fields(hwnd: HWND) {
-    unsafe {
-        EnableWindow(
-            GetDlgItem(hwnd, WIDTH),
-            i32::from(selected(hwnd, DISPLAY) == 1),
-        );
+#[tauri::command]
+fn open_token_page(window: WebviewWindow, state: State<'_, SettingsRuntime>) -> Result<(), String> {
+    let session = session(&window, &state)?;
+    require_updates(session.as_ref().expect("settings session checked"))?;
+    let repository =
+        update::configured_repository().ok_or("GitHub release access is unavailable.")?;
+    let (account, _) = repository
+        .split_once('/')
+        .ok_or("GitHub release access is unavailable.")?;
+    let url = wide(&format!(
+        "https://github.com/settings/personal-access-tokens/new?name=NetBar%20Updates&target_name={account}&contents=read"
+    ));
+    let hwnd = window.hwnd().map_or(null_mut(), |hwnd| hwnd.0);
+    let outcome = unsafe {
+        ShellExecuteW(
+            hwnd,
+            w!("open"),
+            url.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    if outcome as usize > 32 {
+        Ok(())
+    } else {
+        Err("Could not open the GitHub access page in your browser.".into())
     }
 }
 
-unsafe fn insert_choices(hwnd: HWND, id: i32, choices: &[&str]) {
-    for choice in choices {
-        unsafe {
-            SendDlgItemMessageW(hwnd, id, CB_ADDSTRING, 0, wide(choice).as_ptr() as isize);
-        }
-    }
-}
-
-unsafe fn set_text(hwnd: HWND, id: i32, value: &str) {
-    unsafe {
-        SetDlgItemTextW(hwnd, id, wide(value).as_ptr());
-    }
-}
-
-unsafe fn get_text(hwnd: HWND, id: i32) -> String {
-    let mut buffer = Zeroizing::new([0u16; 512]);
-    let length = unsafe { GetDlgItemTextW(hwnd, id, buffer.as_mut_ptr(), buffer.len() as i32) };
-    String::from_utf16_lossy(&buffer[..length as usize])
-}
-
-unsafe fn checked(hwnd: HWND, id: i32) -> bool {
-    unsafe { IsDlgButtonChecked(hwnd, id) == BST_CHECKED }
-}
-unsafe fn check(hwnd: HWND, id: i32, checked: bool) {
-    unsafe {
-        CheckDlgButton(hwnd, id, if checked { BST_CHECKED } else { BST_UNCHECKED });
-    }
-}
-unsafe fn selected(hwnd: HWND, id: i32) -> isize {
-    unsafe { SendDlgItemMessageW(hwnd, id, CB_GETCURSEL, 0, 0) }
+#[tauri::command]
+fn close_settings(window: WebviewWindow, state: State<'_, SettingsRuntime>) -> Result<(), String> {
+    drop(session(&window, &state)?);
+    window.close().map_err(|error| error.to_string())
 }

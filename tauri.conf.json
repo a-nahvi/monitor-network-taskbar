@@ -1,0 +1,58 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "NetBar",
+  "mainBinaryName": "NetBar",
+  "identifier": "com.netbar.monitor",
+  "build": {
+    "frontendDist": "frontend"
+  },
+  "app": {
+    "windows": [],
+    "withGlobalTauri": true,
+    "security": {
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-src 'none'; base-uri 'none'",
+      "capabilities": [
+        {
+          "identifier": "settings",
+          "description": "Local NetBar preferences and verified release updates",
+          "windows": ["settings"],
+          "permissions": [
+            "allow-settings-state",
+            "allow-save-settings",
+            "allow-configure-updates",
+            "allow-check-updates",
+            "allow-install-update",
+            "allow-open-token-page",
+            "allow-close-settings"
+          ]
+        },
+        {
+          "identifier": "widget",
+          "description": "Taskbar monitor snapshots and controls",
+          "windows": ["widget"],
+          "permissions": [
+            "allow-widget-snapshot",
+            "allow-widget-action",
+            "core:event:allow-listen",
+            "core:event:allow-unlisten"
+          ]
+        },
+        {
+          "identifier": "widget-tooltip",
+          "description": "Read-only taskbar monitor tooltip",
+          "windows": ["widget-tooltip"],
+          "permissions": [
+            "allow-widget-snapshot",
+            "core:event:allow-listen",
+            "core:event:allow-unlisten"
+          ]
+        }
+      ]
+    }
+  },
+  "bundle": {
+    "active": false,
+    "icon": ["resources/app.ico"],
+    "publisher": "NetBar"
+  }
+}
