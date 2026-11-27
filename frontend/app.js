@@ -288,7 +288,7 @@ byId("token").addEventListener("keydown", (event) => {
   }
 });
 
-function rateLabel(bytes, showBits) {
+function renderRate(valueId, bytes, showBits) {
   const base = showBits ? 1000 : 1024;
   const units = showBits ? ["b/s", "Kb/s", "Mb/s", "Gb/s"] : ["B/s", "KB/s", "MB/s", "GB/s"];
   let value = showBits ? bytes * 8 : bytes;
@@ -302,7 +302,8 @@ function rateLabel(bytes, showBits) {
     unit += 1;
   }
   const digits = unit === 0 || value >= 100 ? 0 : 1;
-  return `${value.toFixed(digits)} ${units[unit]}`;
+  byId(valueId).textContent = value.toFixed(digits);
+  byId(`${valueId}-unit`).textContent = units[unit];
 }
 
 const graphSamples = [
@@ -368,8 +369,8 @@ function renderPreview() {
     renderGraph(canvas, customUp ? toHex(upColor) : (dark ? "#ffab45" : "#ae460c"),
       customDown ? toHex(downColor) : (dark ? "#42c2ff" : "#0067a7"), dark);
   } else {
-    byId("preview-up").textContent = rateLabel(624 * 1024, bits);
-    byId("preview-down").textContent = rateLabel(8.4 * 1024 ** 2, bits);
+    renderRate("preview-up", 624 * 1024, bits);
+    renderRate("preview-down", 8.4 * 1024 ** 2, bits);
   }
 }
 
@@ -401,7 +402,7 @@ async function initialize() {
   try {
     state = invoke ? await invoke("settings_state") : {
       settings: defaultSettings, defaults: defaultSettings, adapters: [], startupEnabled: false,
-      startupAllowed: false, updatesAllowed: false, repository: null, version: "2.1.1", preview: true,
+      startupAllowed: false, updatesAllowed: false, repository: null, version: "2.2.0", preview: true,
     };
     settings = { ...state.settings };
     savedSettings = { ...settings };

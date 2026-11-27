@@ -82,8 +82,14 @@
               <div class="preview-track" id="preview-track" aria-hidden="true">
                 <div class="preview-widget" id="preview-widget">
                   <div class="preview-rates" id="preview-rates">
-                    <span class="rate-upload"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="icons/feather.svg#arrow-up"></use></svg><span id="preview-up">624 KB/s</span></span>
-                    <span class="rate-download"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="icons/feather.svg#arrow-down"></use></svg><span id="preview-down">8.4 MB/s</span></span>
+                    <span class="rate-upload">
+                      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="icons/feather.svg#arrow-up"></use></svg>
+                      <span id="preview-up">624</span><span id="preview-up-unit">KB/s</span>
+                    </span>
+                    <span class="rate-download">
+                      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="icons/feather.svg#arrow-down"></use></svg>
+                      <span id="preview-down">8.4</span><span id="preview-down-unit">MB/s</span>
+                    </span>
                   </div>
                   <canvas id="preview-graph" width="448" height="108" hidden></canvas>
                 </div>

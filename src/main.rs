@@ -6,6 +6,7 @@ mod settings_window;
 mod startup;
 mod update;
 mod widget;
+mod widget_window;
 
 use network::{Monitor, RateLabel, Rates};
 use preferences::Settings;
@@ -321,12 +322,14 @@ struct Tray {
     menu: Menu<Wry>,
     visible: CheckMenuItem<Wry>,
     locked: CheckMenuItem<Wry>,
+    paused: CheckMenuItem<Wry>,
     reset: MenuItem<Wry>,
 }
 
 const ACTION_SHOW: usize = 1;
 const ACTION_LOCK: usize = 2;
 const ACTION_RESET: usize = 3;
+const ACTION_TOGGLE_PAUSE: usize = 4;
 
 impl Tray {
     fn new(app: &AppHandle, control: HWND, settings: &Settings) -> tauri::Result<Self> {
@@ -354,6 +357,8 @@ impl Tray {
             settings.offset != 0,
             None::<&str>,
         )?;
+        let paused =
+            CheckMenuItem::with_id(app, "paused", "Pause readings", true, false, None::<&str>)?;
         let quit = MenuItem::with_id(app, "quit", "Exit NetBar", true, None::<&str>)?;
         let menu = Menu::with_items(
             app,
@@ -363,6 +368,7 @@ impl Tray {
                 &visible,
                 &locked,
                 &reset,
+                &paused,
                 &PredefinedMenuItem::separator(app)?,
                 &quit,
             ],
@@ -374,6 +380,7 @@ impl Tray {
                 "visible" => (MENU_ACTION, ACTION_SHOW),
                 "locked" => (MENU_ACTION, ACTION_LOCK),
                 "reset" => (MENU_ACTION, ACTION_RESET),
+                "paused" => (MENU_ACTION, ACTION_TOGGLE_PAUSE),
                 "quit" => (WM_CLOSE, 0),
                 _ => return,
             };
@@ -386,6 +393,7 @@ impl Tray {
             menu,
             visible,
             locked,
+            paused,
             reset,
         })
     }
@@ -448,6 +456,7 @@ struct App {
     rates: Rates,
     history: Vec<(f64, f64)>,
     dragging: Option<Drag>,
+    paused: bool,
     suspended: bool,
 }
 
@@ -478,16 +487,20 @@ impl App {
             rates: Rates::default(),
             history: Vec::new(),
             dragging: None,
+            paused: false,
             suspended: false,
         })
     }
 
-    fn refresh_network(&mut self) -> bool {
+    fn select_network(&mut self) -> bool {
         self.last_network = Some(Instant::now());
         let adapters = network::adapters();
-        let changed = self
-            .network
-            .select(network::select(&adapters, &self.settings.adapter));
+        self.network
+            .select(network::select(&adapters, &self.settings.adapter))
+    }
+
+    fn refresh_network(&mut self) -> bool {
+        let changed = self.select_network();
         if changed {
             self.history.clear();
             self.rates = self.network.sample();
@@ -532,7 +545,6 @@ impl App {
             [(rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8]
         }
         self.widget.update(
-            self.hwnd,
             Presentation {
                 visible: s.visible && !self.suspended,
                 graph: s.graph,
@@ -562,15 +574,41 @@ impl App {
     }
 
     fn refresh_placement(&mut self) {
-        self.widget.refresh_placement(self.hwnd);
+        self.widget.refresh_placement();
         self.tray.ensure_icon(&self.ui, self.hwnd);
+    }
+
+    fn is_sampling(&self) -> bool {
+        !self.paused && !self.suspended
     }
 
     fn arm_sample(&self) {
         unsafe {
             KillTimer(self.hwnd, SAMPLE_TIMER);
-            timer(self.hwnd, SAMPLE_TIMER, self.settings.interval, 75);
+            if self.is_sampling() {
+                timer(self.hwnd, SAMPLE_TIMER, self.settings.interval, 75);
+            } else {
+                KillTimer(self.hwnd, NETWORK_TIMER);
+            }
         }
+    }
+
+    fn prime_network(&mut self) {
+        self.network.reset();
+        if self.select_network() {
+            self.history.clear();
+        }
+        // The next full sampling interval replaces the displayed reading.
+        self.network.sample();
+    }
+
+    fn toggle_pause(&mut self) {
+        self.paused = !self.paused;
+        let _ = self.tray.paused.set_checked(self.paused);
+        if self.is_sampling() {
+            self.prime_network();
+        }
+        self.arm_sample();
     }
 
     fn open_settings(&mut self) {
@@ -603,14 +641,18 @@ impl App {
         if interval_changed {
             self.arm_sample();
         }
-        if adapter_changed {
-            self.refresh_network();
+        if adapter_changed && self.is_sampling() {
+            self.prime_network();
         }
         self.tray.sync(&self.settings, self.settings_open);
         self.refresh_widget(true);
     }
 
     fn menu_action(&mut self, action: usize) {
+        if action == ACTION_TOGGLE_PAUSE {
+            self.toggle_pause();
+            return;
+        }
         if self.settings_open {
             self.tray.sync(&self.settings, true);
             return;
@@ -633,19 +675,15 @@ impl App {
 
     fn widget_action(&mut self, action: usize, value: isize) {
         match action {
-            widget::ACTION_SETTINGS => self.open_settings(),
-            widget::ACTION_CONTEXT => {
-                if let Some(window) = self.widget.window() {
-                    let _ = window.popup_menu(&self.tray.menu);
-                }
-            }
-            widget::ACTION_DRAG_BEGIN if !self.settings.locked && !self.settings_open => {
+            widget_window::ACTION_SETTINGS => self.open_settings(),
+            widget_window::ACTION_PAUSE => self.toggle_pause(),
+            widget_window::ACTION_DRAG_BEGIN if !self.settings.locked && !self.settings_open => {
                 self.dragging = Some(Drag {
                     origin: value as i32,
                     offset: self.settings.offset,
                 });
             }
-            widget::ACTION_DRAG_MOVE => {
+            widget_window::ACTION_DRAG_MOVE => {
                 if let Some(drag) = &self.dragging {
                     let distance = i64::from(value as i32) - i64::from(drag.origin);
                     let offset = (i64::from(drag.offset)
@@ -657,8 +695,8 @@ impl App {
                     }
                 }
             }
-            widget::ACTION_DRAG_END => self.finish_drag(true),
-            widget::ACTION_DRAG_CANCEL => self.finish_drag(false),
+            widget_window::ACTION_DRAG_END => self.finish_drag(true),
+            widget_window::ACTION_DRAG_CANCEL => self.finish_drag(false),
             _ => {}
         }
     }
@@ -685,18 +723,18 @@ impl App {
             }
             match message {
                 WM_TIMER => match word {
-                    SAMPLE_TIMER if !self.suspended => self.sample(),
+                    SAMPLE_TIMER if self.is_sampling() => self.sample(),
                     PLACEMENT_TIMER if !self.suspended => self.refresh_placement(),
                     NETWORK_TIMER => {
                         KillTimer(self.hwnd, NETWORK_TIMER);
-                        if !self.suspended {
+                        if self.is_sampling() {
                             self.refresh_network();
                             self.refresh_widget(false);
                         }
                     }
                     _ => {}
                 },
-                NETWORK_CHANGED => timer(self.hwnd, NETWORK_TIMER, 200, 30),
+                NETWORK_CHANGED if self.is_sampling() => timer(self.hwnd, NETWORK_TIMER, 200, 30),
                 POSITION_CHANGED | WM_DISPLAYCHANGE | WM_DPICHANGED => self.refresh_placement(),
                 WM_SETTINGCHANGE | WM_THEMECHANGED => {
                     self.light_text = preferences::light_text(self.settings.theme);
@@ -706,17 +744,16 @@ impl App {
                     match word as u32 {
                         PBT_APMSUSPEND => {
                             self.suspended = true;
-                            KillTimer(self.hwnd, SAMPLE_TIMER);
+                            self.arm_sample();
                             self.refresh_widget(true);
                         }
                         PBT_APMRESUMEAUTOMATIC | PBT_APMRESUMESUSPEND | PBT_APMRESUMECRITICAL
                             if self.suspended =>
                         {
                             self.suspended = false;
-                            self.network.reset();
-                            self.history.clear();
-                            if !self.refresh_network() {
-                                self.rates = self.network.sample();
+                            if self.is_sampling() {
+                                self.history.clear();
+                                self.prime_network();
                             }
                             self.refresh_widget(true);
                             self.arm_sample();
@@ -730,7 +767,7 @@ impl App {
                 SETTINGS_CLOSED => self.set_settings_open(false),
                 SETTINGS_RELOAD => self.apply(Settings::load(&self.path)),
                 MENU_ACTION => self.menu_action(word),
-                widget::WIDGET_ACTION => self.widget_action(word, param),
+                widget_window::WIDGET_ACTION => self.widget_action(word, param),
                 WM_DESTROY => {
                     PostQuitMessage(0);
                 }

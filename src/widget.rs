@@ -1,33 +1,28 @@
-use std::ptr::{null, null_mut};
-use std::sync::{Arc, Mutex, MutexGuard};
+use crate::widget_window::WidgetWindow;
+use std::ffi::c_void;
+use std::ptr::{NonNull, null, null_mut};
 use std::time::{Duration, Instant};
-
-use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
-use windows_sys::Win32::Foundation::{HWND, LPARAM, POINT, RECT, SIZE, WPARAM};
-use windows_sys::Win32::Graphics::Dwm::{DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
-use windows_sys::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, HMONITOR, MONITOR_DEFAULTTONULL, MONITOR_DEFAULTTOPRIMARY, MONITORINFO,
-    MonitorFromWindow,
+use tauri::AppHandle;
+use windows_sys::{
+    Win32::{
+        Foundation::{HWND, LPARAM, POINT, RECT, SIZE},
+        Graphics::{
+            Dwm::{DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute},
+            Gdi::*,
+        },
+        UI::{HiDpi::GetDpiForWindow, WindowsAndMessaging::*},
+    },
+    w,
 };
-use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
-use windows_sys::Win32::UI::WindowsAndMessaging::*;
-use windows_sys::w;
 
-const WIDGET_LABEL: &str = "widget";
-const READING_EVENT: &str = "netbar-widget-reading";
 const PANEL_DPI: u32 = 96;
-const SURFACE_RETRY: Duration = Duration::from_secs(30);
-
-pub const WIDGET_ACTION: u32 = WM_APP + 8;
-pub const ACTION_SETTINGS: WPARAM = 1;
-pub const ACTION_CONTEXT: WPARAM = 2;
-pub const ACTION_DRAG_BEGIN: WPARAM = 3;
-pub const ACTION_DRAG_MOVE: WPARAM = 4;
-pub const ACTION_DRAG_END: WPARAM = 5;
-pub const ACTION_DRAG_CANCEL: WPARAM = 6;
-
+const GRAPH_POINTS: usize = 61;
+const GRAPH_WINDOW_MS: u32 = 60_000;
+const WINDOW_RETRY: Duration = Duration::from_secs(5);
+const TEXT_LEFT: i32 = 20;
+const UNIT_GAP: i32 = 3;
 type Color = [u8; 3];
+type Trace = [f32; 2];
 
 pub struct Presentation<'a> {
     pub visible: bool,
@@ -46,106 +41,85 @@ pub struct Presentation<'a> {
     pub history: &'a [(f64, f64)],
 }
 
-#[derive(Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct Reading {
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Appearance {
+    visible: bool,
     graph: bool,
+    graph_width: i32,
     text_size: i32,
-    locked: bool,
+    light_text: bool,
+    horizontal_offset: i32,
+    colors: [Option<Color>; 2],
     connected: bool,
-    interval: u32,
-    upload: String,
-    download: String,
-    colors: [Color; 2],
-    history: Vec<(f64, f64)>,
 }
 
-#[derive(Clone, Default, Serialize)]
-pub struct WidgetSnapshot {
-    revision: u64,
-    reading: Option<Reading>,
-}
-
-pub struct WidgetChannel {
-    control: usize,
-    data: Arc<Mutex<WidgetSnapshot>>,
-}
-
-#[tauri::command]
-pub fn widget_snapshot(
-    window: WebviewWindow,
-    state: State<'_, WidgetChannel>,
-) -> Result<WidgetSnapshot, String> {
-    if window.label() != WIDGET_LABEL {
-        return Err("This window cannot access the taskbar display.".into());
-    }
-    Ok(lock(&state.data).clone())
-}
-
-#[tauri::command]
-pub fn widget_action(
-    window: WebviewWindow,
-    state: State<'_, WidgetChannel>,
-    action: String,
-) -> Result<(), String> {
-    if window.label() != WIDGET_LABEL {
-        return Err("This window cannot control the taskbar display.".into());
-    }
-    let id = match action.as_str() {
-        "settings" => ACTION_SETTINGS,
-        "context" => ACTION_CONTEXT,
-        "drag-begin" => ACTION_DRAG_BEGIN,
-        "drag-move" => ACTION_DRAG_MOVE,
-        "drag-end" => ACTION_DRAG_END,
-        "drag-cancel" => ACTION_DRAG_CANCEL,
-        _ => return Err("Unknown taskbar action.".into()),
-    };
-    let value = if matches!(id, ACTION_DRAG_BEGIN | ACTION_DRAG_MOVE) {
-        let mut point = POINT::default();
-        if unsafe { GetCursorPos(&mut point) } == 0 {
-            return Err("The pointer location could not be read.".into());
+impl Appearance {
+    fn size(self, dpi: u32) -> SIZE {
+        let font = self.text_size;
+        let width = if self.graph {
+            self.graph_width
+        } else {
+            (font * 7 + 18).max(96)
+        };
+        let height = ((font * 5 + 3) / 4 * 2 + 2).max(34);
+        SIZE {
+            cx: scaled(width, dpi),
+            cy: scaled(height, dpi),
         }
-        point.x as LPARAM
-    } else {
-        0
-    };
-    if unsafe { PostMessageW(state.control as HWND, WIDGET_ACTION, id, value) } == 0 {
-        return Err("The NetBar monitor has closed.".into());
     }
-    Ok(())
+
+    fn palette(self) -> [Color; 2] {
+        let shade = match (self.light_text, self.connected) {
+            (true, true) => 249,
+            (true, false) => 167,
+            (false, true) => 22,
+            (false, false) => 97,
+        };
+        if !self.connected {
+            return [[shade; 3]; 2];
+        }
+        let standard = match (self.graph, self.light_text) {
+            (true, true) => [[253, 171, 93], [81, 207, 253]],
+            (true, false) => [[157, 68, 13], [0, 99, 161]],
+            (false, _) => [[shade; 3]; 2],
+        };
+        [
+            self.colors[0].unwrap_or(standard[0]),
+            self.colors[1].unwrap_or(standard[1]),
+        ]
+    }
 }
 
 pub struct Widget {
     app: AppHandle,
-    data: Arc<Mutex<WidgetSnapshot>>,
-    placement: Option<Placement>,
+    control: HWND,
+    window: Option<WidgetWindow>,
+    next_window_attempt: Option<Instant>,
+    appearance: Option<Appearance>,
+    rates: [String; 2],
+    graph: Graph,
     taskbar: Taskbar,
     surface: Option<Surface>,
-    next_build: Option<Instant>,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct Placement {
-    visible: bool,
-    width: i32,
-    height: i32,
-    offset: i32,
+    position: Option<(i32, i32)>,
+    draggable: bool,
+    dirty: bool,
 }
 
 impl Widget {
     pub fn new(app: AppHandle, control: HWND) -> Self {
-        let data = Arc::new(Mutex::new(WidgetSnapshot::default()));
-        app.manage(WidgetChannel {
-            control: control as usize,
-            data: data.clone(),
-        });
         Self {
             app,
-            data,
-            placement: None,
+            control,
+            window: None,
+            next_window_attempt: None,
+            appearance: None,
+            rates: std::array::from_fn(|_| String::with_capacity(20)),
+            graph: Graph::new(),
             taskbar: Taskbar::default(),
             surface: None,
-            next_build: None,
+            position: None,
+            draggable: false,
+            dirty: true,
         }
     }
 
@@ -153,265 +127,242 @@ impl Widget {
         self.taskbar.dpi()
     }
 
-    pub fn window(&self) -> Option<&WebviewWindow> {
-        self.surface
-            .as_ref()
-            .filter(|surface| surface.live())
-            .map(|surface| &surface.window)
-    }
-
-    pub fn update(&mut self, control: HWND, presentation: Presentation<'_>, force: bool) {
-        invalidate_surface(&mut self.surface, &mut self.next_build);
-        let font = presentation.text_size.clamp(8, 20);
-        let placement = Placement {
+    pub fn update(&mut self, presentation: Presentation<'_>, force: bool) {
+        let appearance = Appearance {
             visible: presentation.visible,
-            width: if presentation.graph {
-                presentation.graph_width.clamp(64, 200)
-            } else {
-                (font * 7 + 18).max(96)
-            },
-            height: ((font * 5 + 3) / 4 * 2 + 2).max(34),
-            offset: presentation.horizontal_offset,
-        };
-        let changed = self.placement != Some(placement);
-        self.placement = Some(placement);
-
-        let reading = Reading {
             graph: presentation.graph,
-            text_size: font,
-            locked: presentation.locked,
+            graph_width: presentation.graph_width.clamp(64, 200),
+            text_size: presentation.text_size.clamp(8, 20),
+            light_text: presentation.light_text,
+            horizontal_offset: presentation.horizontal_offset,
+            colors: [presentation.upload_color, presentation.download_color],
             connected: presentation.connected,
-            interval: presentation.sample_interval_ms,
-            upload: presentation.upload.to_owned(),
-            download: presentation.download.to_owned(),
-            colors: palette(&presentation),
-            history: if presentation.graph && presentation.connected {
-                presentation.history.to_vec()
-            } else {
-                Vec::new()
-            },
         };
-        let event = {
-            let mut data = lock(&self.data);
-            if data.reading.as_ref() == Some(&reading) {
-                None
-            } else {
-                data.revision += 1;
-                data.reading = Some(reading);
-                Some(data.clone())
-            }
-        };
+        let old = self.appearance.replace(appearance);
+        let placement_changed = old.is_none_or(|old| {
+            old.visible != appearance.visible
+                || old.horizontal_offset != appearance.horizontal_offset
+                || old.graph != appearance.graph
+                || old.graph_width != appearance.graph_width
+                || old.text_size != appearance.text_size
+        });
+        self.dirty |= old.is_none_or(|old| {
+            old.graph != appearance.graph
+                || old.light_text != appearance.light_text
+                || old.colors != appearance.colors
+                || old.connected != appearance.connected
+        });
 
-        if !placement.visible {
-            if let Some(surface) = self.surface.take() {
-                surface.destroy();
+        let draggable = !presentation.locked;
+        if self.draggable != draggable {
+            self.draggable = draggable;
+            if let Some(window) = &self.window {
+                window.set_draggable(draggable);
             }
+        }
+
+        if !appearance.visible {
+            self.hide();
+            self.surface = None;
             return;
         }
-        if changed || force || self.surface.is_none() {
-            self.refresh_placement(control);
+        if appearance.graph {
+            let history = if appearance.connected {
+                presentation.history
+            } else {
+                &[]
+            };
+            self.dirty |= self
+                .graph
+                .set_history(history, presentation.sample_interval_ms);
+        } else {
+            for (saved, next) in self
+                .rates
+                .iter_mut()
+                .zip([presentation.upload, presentation.download])
+            {
+                if saved != next {
+                    saved.clear();
+                    saved.push_str(next);
+                    self.dirty = true;
+                }
+            }
         }
-        if let (Some(window), Some(payload)) = (self.window(), event) {
-            let _ = window.emit_to(WIDGET_LABEL, READING_EVENT, payload);
+        if placement_changed || force || self.window.is_none() {
+            self.refresh_placement();
+        } else if let (Some(window), Some(position)) = (&self.window, self.position) {
+            self.present(window.hwnd(), position);
         }
     }
 
-    pub fn refresh_placement(&mut self, control: HWND) {
-        invalidate_surface(&mut self.surface, &mut self.next_build);
-        let Some(placement) = self.placement.filter(|placement| placement.visible) else {
+    pub fn refresh_placement(&mut self) {
+        let Some(appearance) = self.appearance.filter(|appearance| appearance.visible) else {
             return;
         };
         let own = self
-            .surface
+            .window
             .as_ref()
-            .map_or(control, |surface| surface.hwnd);
+            .map_or(self.control, WidgetWindow::hwnd);
         if !self.taskbar.refresh(own) {
             self.hide();
             return;
         }
         let dpi = self.dpi();
-        let size = SIZE {
-            cx: scaled(placement.width, dpi),
-            cy: scaled(placement.height, dpi),
-        };
-        let Some((x, y)) = self.taskbar.position(size, placement.offset) else {
+        let size = appearance.size(dpi);
+        let Some(position) = self.taskbar.position(size, appearance.horizontal_offset) else {
             self.hide();
             return;
         };
-        if self.surface.is_none() && due(self.next_build) {
-            match Surface::build(&self.app, WIDGET_LABEL, "NetBar taskbar", "widget.html") {
-                Ok(surface) => self.surface = Some(surface),
+        if self.window.is_none()
+            && self
+                .next_window_attempt
+                .is_none_or(|time| Instant::now() >= time)
+        {
+            match WidgetWindow::new(&self.app, self.control) {
+                Ok(window) => {
+                    window.set_draggable(self.draggable);
+                    self.window = Some(window);
+                    self.dirty = true;
+                }
                 Err(error) => {
-                    eprintln!("Could not start the NetBar taskbar display: {error}");
-                    self.next_build = Some(retry_after(&error));
+                    eprintln!("Could not create the NetBar taskbar window: {error}");
+                    self.next_window_attempt = Some(Instant::now() + WINDOW_RETRY);
                 }
             }
         }
-        if let Some(surface) = &mut self.surface {
-            let raise = self.taskbar.above(surface.hwnd);
-            surface.place(
-                Bounds {
-                    x,
-                    y,
-                    width: size.cx,
-                    height: size.cy,
-                },
-                raise,
-            );
+        let Some(hwnd) = self.window.as_ref().map(WidgetWindow::hwnd) else {
+            return;
+        };
+        let font = if appearance.graph {
+            0
+        } else {
+            scaled(appearance.text_size, dpi)
+        };
+        if self.surface.as_ref().is_none_or(|surface| {
+            surface.width != size.cx || surface.height != size.cy || surface.font_size != font
+        }) {
+            // Keep the previous composed frame on screen until Windows accepts a replacement.
+            let Some(surface) = Surface::create(size, font) else {
+                return;
+            };
+            self.surface = Some(surface);
+            self.dirty = true;
+        }
+
+        if self.dirty {
+            self.present(hwnd, position);
+        } else if self.position != Some(position)
+            && unsafe {
+                SetWindowPos(
+                    hwnd,
+                    null_mut(),
+                    position.0,
+                    position.1,
+                    0,
+                    0,
+                    SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+                )
+            } != 0
+        {
+            self.position = Some(position);
+        }
+        if self.position == Some(position)
+            && (unsafe { IsWindowVisible(hwnd) } == 0 || self.taskbar.above(hwnd))
+        {
+            unsafe {
+                SetWindowPos(
+                    hwnd,
+                    HWND_TOPMOST,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW,
+                );
+            }
         }
     }
 
     fn hide(&mut self) {
-        if let Some(surface) = &mut self.surface {
-            surface.hide();
-        }
-    }
-}
-
-impl Drop for Widget {
-    fn drop(&mut self) {
-        if let Some(surface) = self.surface.take() {
-            surface.destroy();
-        }
-    }
-}
-
-fn lock<T>(data: &Mutex<T>) -> MutexGuard<'_, T> {
-    data.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-fn due(time: Option<Instant>) -> bool {
-    time.is_none_or(|time| Instant::now() >= time)
-}
-
-fn invalidate_surface(surface: &mut Option<Surface>, retry: &mut Option<Instant>) {
-    if surface.as_ref().is_some_and(|surface| !surface.live()) {
-        *surface = None;
-        *retry = None;
-    }
-}
-
-fn retry_after(error: &tauri::Error) -> Instant {
-    let delay = match error {
-        tauri::Error::InvalidWindowHandle
-        | tauri::Error::WindowLabelAlreadyExists(_)
-        | tauri::Error::WebviewLabelAlreadyExists(_) => Duration::from_millis(300),
-        _ => SURFACE_RETRY,
-    };
-    Instant::now() + delay
-}
-
-fn palette(presentation: &Presentation<'_>) -> [Color; 2] {
-    let shade = match (presentation.light_text, presentation.connected) {
-        (true, true) => 249,
-        (true, false) => 167,
-        (false, true) => 22,
-        (false, false) => 97,
-    };
-    if !presentation.connected {
-        return [[shade; 3]; 2];
-    }
-    let standard = match (presentation.graph, presentation.light_text) {
-        (true, true) => [[253, 171, 93], [81, 207, 253]],
-        (true, false) => [[157, 68, 13], [0, 99, 161]],
-        (false, _) => [[shade; 3]; 2],
-    };
-    [
-        presentation.upload_color.unwrap_or(standard[0]),
-        presentation.download_color.unwrap_or(standard[1]),
-    ]
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct Bounds {
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
-}
-
-struct Surface {
-    window: WebviewWindow,
-    hwnd: HWND,
-    shown: bool,
-    bounds: Option<Bounds>,
-}
-
-impl Surface {
-    fn build(app: &AppHandle, label: &str, title: &str, page: &str) -> tauri::Result<Self> {
-        let window = if let Some(window) = app.get_webview_window(label) {
-            window
-        } else {
-            WebviewWindowBuilder::new(app, label, WebviewUrl::App(page.into()))
-                .title(title)
-                .decorations(false)
-                .shadow(false)
-                .resizable(false)
-                .minimizable(false)
-                .maximizable(false)
-                .transparent(true)
-                .no_redirection_bitmap(true)
-                .focusable(false)
-                .focused(false)
-                .skip_taskbar(true)
-                .always_on_top(true)
-                .visible(false)
-                .devtools(false)
-                .disable_drag_drop_handler()
-                .inner_size(120.0, 34.0)
-                .build()?
-        };
-        let hwnd = window.hwnd()?.0;
-        if unsafe { IsWindow(hwnd) } == 0 {
-            return Err(tauri::Error::InvalidWindowHandle);
-        }
-        Ok(Self {
-            window,
-            hwnd,
-            shown: false,
-            bounds: None,
-        })
-    }
-
-    fn live(&self) -> bool {
-        unsafe { IsWindow(self.hwnd) != 0 }
-    }
-
-    fn place(&mut self, bounds: Bounds, raise: bool) {
-        if self.bounds == Some(bounds)
-            && self.shown
-            && !raise
-            && unsafe { IsWindowVisible(self.hwnd) } != 0
+        if let Some(window) = &self.window
+            && unsafe { IsWindowVisible(window.hwnd()) } != 0
         {
+            unsafe {
+                ShowWindow(window.hwnd(), SW_HIDE);
+            }
+        }
+        self.position = None;
+    }
+
+    fn present(&mut self, hwnd: HWND, position: (i32, i32)) {
+        if !self.dirty {
             return;
         }
-        if unsafe {
-            SetWindowPos(
-                self.hwnd,
-                HWND_TOPMOST,
-                bounds.x,
-                bounds.y,
-                bounds.width,
-                bounds.height,
-                SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW | SWP_ASYNCWINDOWPOS,
-            )
-        } != 0
-        {
-            self.shown = true;
-            self.bounds = Some(bounds);
+        let dpi = self.dpi();
+        let (Some(appearance), Some(surface)) = (self.appearance, &mut self.surface) else {
+            return;
+        };
+        let traces = appearance
+            .graph
+            .then_some(&self.graph.samples[..self.graph.slots]);
+        surface.paint(appearance, &self.rates, traces, dpi);
+        if surface.submit(hwnd, position.0, position.1) {
+            self.dirty = false;
+            self.position = Some(position);
+        }
+    }
+}
+
+struct Graph {
+    inputs: [(f64, f64); GRAPH_POINTS],
+    samples: [Trace; GRAPH_POINTS],
+    len: usize,
+    slots: usize,
+    scale: f64,
+}
+
+impl Graph {
+    fn new() -> Self {
+        Self {
+            inputs: [(0.0, 0.0); GRAPH_POINTS],
+            samples: [[0.0; 2]; GRAPH_POINTS],
+            len: 0,
+            slots: 0,
+            scale: 1.0,
         }
     }
 
-    fn hide(&mut self) {
-        if self.shown {
-            unsafe { ShowWindowAsync(self.hwnd, SW_HIDE) };
-            self.shown = false;
+    fn set_history(&mut self, history: &[(f64, f64)], interval_ms: u32) -> bool {
+        let slots = (GRAPH_WINDOW_MS / interval_ms.clamp(1000, 5000) + 1) as usize;
+        let history = &history[history.len().saturating_sub(slots)..];
+        if self.slots == slots && self.inputs[..self.len] == *history {
+            return false;
         }
-    }
-
-    fn destroy(mut self) {
-        self.hide();
-        let _ = self.window.destroy();
+        self.inputs[..history.len()].copy_from_slice(history);
+        self.len = history.len();
+        let mut changed = self.slots != slots;
+        self.slots = slots;
+        let maximum = history.iter().fold(1.0_f64, |peak, &(upload, download)| {
+            peak.max(upload).max(download)
+        });
+        if maximum > self.scale || maximum < self.scale * 0.55 {
+            self.scale = maximum * 1.14;
+        }
+        let padding = slots - history.len();
+        for (index, value) in self.samples[..slots].iter_mut().enumerate() {
+            let next = if index < padding {
+                [0.0; 2]
+            } else {
+                let (upload, download) = history[index - padding];
+                [
+                    (upload / self.scale).clamp(0.0, 1.0) as f32,
+                    (download / self.scale).clamp(0.0, 1.0) as f32,
+                ]
+            };
+            changed |= *value != next;
+            *value = next;
+        }
+        changed
     }
 }
 
@@ -582,4 +533,317 @@ fn encloses(outer: RECT, inner: RECT) -> bool {
 
 fn scaled(logical: i32, dpi: u32) -> i32 {
     (logical * dpi as i32 + 48 * logical.signum()) / 96
+}
+
+struct Surface {
+    dc: HDC,
+    bitmap: HBITMAP,
+    font: HFONT,
+    pixels: NonNull<u32>,
+    width: i32,
+    height: i32,
+    font_size: i32,
+    value_width: i32,
+}
+
+impl Surface {
+    fn create(size: SIZE, font_size: i32) -> Option<Self> {
+        unsafe {
+            let dc = CreateCompatibleDC(null_mut());
+            if dc.is_null() {
+                return None;
+            }
+            let info = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: size.cx,
+                    biHeight: -size.cy,
+                    biPlanes: 1,
+                    biBitCount: 32,
+                    biCompression: BI_RGB,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let mut pixels = null_mut::<c_void>();
+            let bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &mut pixels, null_mut(), 0);
+            let pixels = NonNull::new(pixels.cast()).filter(|_| !bitmap.is_null());
+            let Some(pixels) = pixels else {
+                if !bitmap.is_null() {
+                    DeleteObject(bitmap);
+                }
+                DeleteDC(dc);
+                return None;
+            };
+            if SelectObject(dc, bitmap).is_null() {
+                DeleteObject(bitmap);
+                DeleteDC(dc);
+                return None;
+            }
+            let font = if font_size > 0 {
+                CreateFontW(
+                    -font_size,
+                    0,
+                    0,
+                    0,
+                    FW_NORMAL as i32,
+                    0,
+                    0,
+                    0,
+                    DEFAULT_CHARSET as u32,
+                    0,
+                    0,
+                    ANTIALIASED_QUALITY as u32,
+                    0,
+                    w!("Segoe UI"),
+                )
+            } else {
+                null_mut()
+            };
+            if !font.is_null() {
+                SelectObject(dc, font);
+            }
+            let mut value_size = SIZE::default();
+            if font_size > 0 && GetTextExtentPoint32W(dc, w!("0000"), 4, &mut value_size) == 0 {
+                value_size.cx = font_size * 3;
+            }
+            SetBkMode(dc, TRANSPARENT as i32);
+            SetTextColor(dc, 0x00FF_FFFF);
+            Some(Self {
+                dc,
+                bitmap,
+                font,
+                pixels,
+                width: size.cx,
+                height: size.cy,
+                font_size,
+                value_width: value_size.cx,
+            })
+        }
+    }
+
+    fn paint(
+        &mut self,
+        appearance: Appearance,
+        rates: &[String; 2],
+        traces: Option<&[Trace]>,
+        dpi: u32,
+    ) {
+        let palette = appearance.palette();
+        let width = self.width as usize;
+        let height = self.height as usize;
+        if traces.is_none() {
+            // Clear the owned top-down DIB before populating the native text mask.
+            unsafe { self.pixels.as_ptr().write_bytes(0, width * height) };
+            self.draw_text(rates, dpi);
+        }
+        // DrawText draws a grayscale mask over black. After GdiFlush, Rust owns the pixel writes.
+        let pixels =
+            unsafe { std::slice::from_raw_parts_mut(self.pixels.as_ptr(), width * height) };
+        if traces.is_some() {
+            pixels.fill(0x0100_0000);
+        } else {
+            for (y, row) in pixels.chunks_exact_mut(width).enumerate() {
+                let color = palette[usize::from(y as i32 >= self.height / 2)];
+                for pixel in row {
+                    let alpha = *pixel as u8;
+                    *pixel = if alpha == 0 {
+                        0x0100_0000
+                    } else {
+                        premultiplied(color, alpha)
+                    };
+                }
+            }
+        }
+
+        let mut painter = Painter {
+            pixels,
+            width: self.width,
+            height: self.height,
+        };
+        let factor = dpi as f32 / PANEL_DPI as f32;
+        if let Some(traces) = traces {
+            let left = 4.0 * factor;
+            let top = 4.0 * factor;
+            let right = self.width as f32 - 4.0 * factor;
+            let bottom = self.height as f32 - 4.0 * factor;
+            let guide = if appearance.light_text {
+                [255; 3]
+            } else {
+                [20; 3]
+            };
+            painter.line(
+                (left, bottom + factor),
+                (right, bottom + factor),
+                0.5 * factor,
+                guide,
+                0.16,
+            );
+            if appearance.connected && traces.len() >= 2 {
+                for (direction, color) in palette.into_iter().enumerate() {
+                    let mut last = (left, bottom - (bottom - top) * traces[0][direction]);
+                    for (column, point) in traces.iter().enumerate().skip(1) {
+                        let x = left + (right - left) * column as f32 / (traces.len() - 1) as f32;
+                        let next = (x, bottom - (bottom - top) * point[direction]);
+                        painter.line(last, next, 0.72 * factor, color, 0.85);
+                        last = next;
+                    }
+                    painter.line(last, last, 1.3 * factor, color, 1.0);
+                }
+            }
+        } else {
+            // Draw the two Feather icons with the same 24-unit geometry as the local SVG sprite.
+            let scale = 13.0 * factor / 24.0;
+            let x = 5.0 * factor + 12.0 * scale;
+            for (direction, color) in palette.into_iter().enumerate() {
+                let center = self.height as f32 * (0.25 + direction as f32 * 0.5);
+                let offset = if direction == 0 {
+                    -7.0 * scale
+                } else {
+                    7.0 * scale
+                };
+                let tip = (x, center + offset);
+                let width = scale;
+                painter.line(tip, (x, center - offset), width, color, 1.0);
+                painter.line(tip, (x - 7.0 * scale, center), width, color, 1.0);
+                painter.line(tip, (x + 7.0 * scale, center), width, color, 1.0);
+            }
+        }
+    }
+
+    fn draw_text(&self, rates: &[String; 2], dpi: u32) {
+        let half = self.height / 2;
+        let value_left = scaled(TEXT_LEFT, dpi);
+        let unit_left = value_left + self.value_width + scaled(UNIT_GAP, dpi);
+        for (row, value) in rates.iter().enumerate() {
+            let (number, unit) = value.rsplit_once(' ').unwrap_or((value, ""));
+            let bounds = RECT {
+                left: value_left,
+                top: half * row as i32,
+                right: unit_left,
+                bottom: if row == 0 { half } else { self.height },
+            };
+            self.draw_text_field(number, bounds);
+            if !unit.is_empty() {
+                self.draw_text_field(
+                    unit,
+                    RECT {
+                        left: unit_left,
+                        right: self.width - scaled(2, dpi),
+                        ..bounds
+                    },
+                );
+            }
+        }
+        unsafe { GdiFlush() };
+    }
+
+    fn draw_text_field(&self, text: &str, mut bounds: RECT) {
+        let mut utf16 = [0u16; 32];
+        let mut length = 0;
+        for (next, slot) in text.encode_utf16().zip(&mut utf16) {
+            *slot = next;
+            length += 1;
+        }
+        unsafe {
+            DrawTextW(
+                self.dc,
+                utf16.as_ptr(),
+                length,
+                &mut bounds,
+                DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS,
+            );
+        }
+    }
+
+    fn submit(&self, hwnd: HWND, x: i32, y: i32) -> bool {
+        let blend = BLENDFUNCTION {
+            BlendOp: AC_SRC_OVER as u8,
+            SourceConstantAlpha: 255,
+            AlphaFormat: AC_SRC_ALPHA as u8,
+            ..Default::default()
+        };
+        unsafe {
+            UpdateLayeredWindow(
+                hwnd,
+                null_mut(),
+                &POINT { x, y },
+                &SIZE {
+                    cx: self.width,
+                    cy: self.height,
+                },
+                self.dc,
+                &POINT::default(),
+                0,
+                &blend,
+                ULW_ALPHA,
+            ) != 0
+        }
+    }
+}
+
+impl Drop for Surface {
+    fn drop(&mut self) {
+        unsafe {
+            DeleteDC(self.dc);
+            DeleteObject(self.bitmap);
+            if !self.font.is_null() {
+                DeleteObject(self.font);
+            }
+        }
+    }
+}
+
+struct Painter<'a> {
+    pixels: &'a mut [u32],
+    width: i32,
+    height: i32,
+}
+
+impl Painter<'_> {
+    fn line(&mut self, from: (f32, f32), to: (f32, f32), radius: f32, color: Color, opacity: f32) {
+        let fringe = radius + 0.6;
+        let left = ((from.0.min(to.0) - fringe).floor() as i32).max(0);
+        let right = ((from.0.max(to.0) + fringe).ceil() as i32).min(self.width - 1);
+        let top = ((from.1.min(to.1) - fringe).floor() as i32).max(0);
+        let bottom = ((from.1.max(to.1) + fringe).ceil() as i32).min(self.height - 1);
+        let dx = to.0 - from.0;
+        let dy = to.1 - from.1;
+        let length_squared = dx * dx + dy * dy;
+        for y in top..=bottom {
+            for x in left..=right {
+                let px = x as f32 + 0.5 - from.0;
+                let py = y as f32 + 0.5 - from.1;
+                let t = if length_squared > 0.0 {
+                    ((px * dx + py * dy) / length_squared).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let ex = px - t * dx;
+                let ey = py - t * dy;
+                let distance = (ex * ex + ey * ey).sqrt();
+                let coverage = (fringe - distance).clamp(0.0, 1.0);
+                let alpha = (coverage * opacity * 255.0) as u8;
+                if alpha > 0 {
+                    let pixel = &mut self.pixels[(y * self.width + x) as usize];
+                    *pixel = over(*pixel, color, alpha);
+                }
+            }
+        }
+    }
+}
+
+fn premultiplied(color: Color, alpha: u8) -> u32 {
+    let alpha = u32::from(alpha);
+    let [red, green, blue] = color.map(|component| (u32::from(component) * alpha + 127) / 255);
+    u32::from_be_bytes([alpha as u8, red as u8, green as u8, blue as u8])
+}
+
+fn over(background: u32, color: Color, alpha: u8) -> u32 {
+    let foreground = premultiplied(color, alpha).to_be_bytes();
+    let remaining = 255 - u32::from(alpha);
+    let background = background.to_be_bytes();
+    u32::from_be_bytes(std::array::from_fn(|channel| {
+        foreground[channel] + ((u32::from(background[channel]) * remaining + 127) / 255) as u8
+    }))
 }

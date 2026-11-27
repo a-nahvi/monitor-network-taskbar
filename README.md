@@ -1,18 +1,18 @@
 # NetBar
 
-NetBar is a Windows 11 x64 taskbar monitor for upload and download activity. Tauri powers the taskbar widget, tray menu, and settings. The Rust backend reads adapter counters through Windows IP Helper.
+NetBar is a Windows 11 x64 taskbar monitor for upload and download activity. Tauri manages the taskbar window, tray menu, and Settings. NetBar draws the taskbar widget to a cached native Windows bitmap and reads adapter counters through Windows IP Helper.
 
 ## Install and upgrade
 
 Open the MSI from the private repository’s Releases page. The installer closes a running per-user NetBar MSI installation and upgrades it in place. It preserves preferences and the Windows Startup shortcut, and can launch the new version on completion. Install and uninstall require no administrator rights. Preferences are kept in `%LocalAppData%\NetBar\NetBar.ini`.
 
-NetBar uses the Microsoft Edge WebView2 Runtime included with Windows 11. If it was removed, install the Evergreen Runtime before launching NetBar. [Microsoft Edge WebView2](https://developer.microsoft.com/microsoft-edge/webview2/)
+NetBar loads the Microsoft Edge WebView2 Runtime when you open Settings. Windows 11 includes this runtime. If it was removed, install the Evergreen Runtime before opening Settings. [Microsoft Edge WebView2](https://developer.microsoft.com/microsoft-edge/webview2/)
 
 Portable copies can be run directly. To switch from a portable copy to an MSI installation, exit that copy first. If its settings live in an adjacent `NetBar.ini`, copy that file to `%LocalAppData%\NetBar\` before installing if the destination does not already exist.
 
 ## Use NetBar
 
-Double-click the widget or select **Settings** from the tray menu. **Display** controls the widget, colors, position, and startup. **Network** controls the adapter, units, and refresh interval. Manual adapter selection remains selected when the adapter is disconnected. Automatic selection prefers an active physical adapter and avoids counting VPN and physical traffic together.
+Right-click the widget to pause or resume readings. Double-click it or select **Settings** from the tray menu to open Settings. **Display** controls the widget, colors, position, and startup. **Network** controls the adapter, units, and refresh interval. Manual adapter selection remains selected when the adapter is disconnected. Automatic selection prefers an active physical adapter and avoids counting VPN and physical traffic together.
 
 Feather icons mark upload on the top row and download on the bottom row. The optional graph covers the last minute with a shared scale. Unlock the position to drag the widget. The widget is anchored near the tray on the primary horizontal taskbar and hides for fullscreen applications or while the taskbar is out of view. [Feather Icons](https://feathericons.com/)
 

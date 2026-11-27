@@ -6,8 +6,6 @@ const COMMANDS: &[&str] = &[
     "install_update",
     "open_token_page",
     "close_settings",
-    "widget_snapshot",
-    "widget_action",
 ];
 
 fn main() {

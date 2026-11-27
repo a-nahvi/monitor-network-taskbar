@@ -25,17 +25,6 @@
             "allow-open-token-page",
             "allow-close-settings"
           ]
-        },
-        {
-          "identifier": "widget",
-          "description": "Taskbar monitor snapshots and controls",
-          "windows": ["widget"],
-          "permissions": [
-            "allow-widget-snapshot",
-            "allow-widget-action",
-            "core:event:allow-listen",
-            "core:event:allow-unlisten"
-          ]
         }
       ]
     }

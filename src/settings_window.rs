@@ -94,8 +94,6 @@ pub fn builder() -> tauri::Builder<Wry> {
             install_update,
             open_token_page,
             close_settings,
-            crate::widget::widget_snapshot,
-            crate::widget::widget_action,
         ])
 }
 
