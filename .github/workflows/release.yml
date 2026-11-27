@@ -1,0 +1,62 @@
+name: Publish NetBar MSI
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: netbar-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.event.repository.private
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verify the version and build the installer
+        shell: pwsh
+        env:
+          NETBAR_UPDATE_REPO: ${{ github.repository }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $metadata = cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json
+          $version = ($metadata.packages | Where-Object name -eq 'netbar').version
+          if (!$version -or $env:GITHUB_REF_NAME -cne "v$version" -or $version -notmatch '^\d+\.\d+\.\d+$') {
+              throw 'The Git tag must match the stable version in Cargo.toml.'
+          }
+          cargo test --locked
+          pwsh -NoProfile -File .\scripts\release.ps1
+
+      - name: Test the upgrade from the original NetBar 1.3.0 installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          pwsh -NoProfile -File .\scripts\verify-package.ps1
+          pwsh -NoProfile -File .\scripts\test-installer.ps1
+
+      - name: Publish the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $version = $env:GITHUB_REF_NAME.Substring(1)
+          $installer = "dist/NetBar-$version-Setup-x64.msi"
+          if (!(Test-Path -LiteralPath $installer -PathType Leaf)) {
+              throw "The expected installer is missing at $installer."
+          }
+          gh release create $env:GITHUB_REF_NAME $installer --repo $env:GITHUB_REPOSITORY `
+              --verify-tag --title "NetBar $version" --generate-notes --latest

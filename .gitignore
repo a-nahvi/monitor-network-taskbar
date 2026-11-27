@@ -1,0 +1,27 @@
+build/
+build-cmake/
+dist/
+artifacts/
+target/
+*.user
+*.pdb
+NetBar.ini
+
+# Local sources and tooling for the 1.x C++ release.
+/CMakeLists.txt
+/src/core/
+/src/platform/
+/src/ui/
+/src/main.cpp
+/src/version.h
+/tests/tests.cpp
+/installer/actions.cpp
+/resources/app.rc
+/resources/settings.rc
+/resources/settings_ids.h
+/resources/download.svg
+/resources/upload.svg
+/docs/
+/scripts/build.ps1
+/scripts/make-icon.ps1
+/scripts/package.ps1
