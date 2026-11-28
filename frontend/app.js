@@ -8,6 +8,7 @@ const tabs = [...nav.querySelectorAll("[role=tab]")];
 const form = byId("settings-form");
 const workspace = byId("workspace");
 const controls = {
+  language: byId("language"),
   display: { graph: form.elements.layout, visible: byId("widget-visible"), width: byId("graph-width"),
     font: byId("text-size"), theme: byId("text-color"), locked: byId("position-locked") },
   network: { adapter: byId("adapter"), bits: byId("speed-units"), interval: byId("interval") },
@@ -16,16 +17,46 @@ const controls = {
 };
 const defaultSettings = { schema: 1, interval: 1000, font: 12, offset: 0, locked: true,
   visible: true, theme: 0, bits: false, graph: false, width: 88, customUp: false, customDown: false,
-  upColor: 0xffab45, downColor: 0x42c2ff, adapter: "" };
+  upColor: 0xffab45, downColor: 0x42c2ff, adapter: "", language: "english" };
+const translatedText = document.querySelectorAll("[data-i18n]");
+const translatedLabels = document.querySelectorAll("[data-i18n-label]");
+const statuses = new Map();
 
 let state;
 let settings;
 let savedSettings;
 let savedStartup;
+let activeLanguage;
 let activeTab = "display";
 let availableVersion = null;
 let settingsBusy = false;
 let updateBusy = false;
+
+function translate(key, value) {
+  const message = locales[activeLanguage ?? "english"][key];
+  return typeof message === "function" ? message(value) : message;
+}
+
+function applyLanguage(language) {
+  if (activeLanguage === language) return;
+
+  activeLanguage = language;
+  const locale = locales[language];
+  document.documentElement.lang = locale.lang;
+  document.documentElement.dir = locale.dir;
+  document.title = locale.windowTitle;
+
+  for (const element of translatedText) element.textContent = translate(element.dataset.i18n);
+  for (const element of translatedLabels) {
+    element.setAttribute("aria-label", translate(element.dataset.i18nLabel));
+  }
+  for (const id of statuses.keys()) renderStatus(id);
+
+  if (state) {
+    byId("sidebar-version").textContent = translate("version", state.version);
+    setAdapterChoices();
+  }
+}
 
 function showTab(name, focus = false) {
   activeTab = name;
@@ -45,27 +76,50 @@ for (const tab of tabs) tab.addEventListener("click", () => showTab(tab.dataset.
 nav.addEventListener("keydown", (event) => {
   const index = tabs.indexOf(event.target);
   if (index < 0) return;
+  const horizontal = nav.getAttribute("aria-orientation") === "horizontal";
+  const rtl = document.documentElement.dir === "rtl";
   let next;
   switch (event.key) {
-    case "ArrowDown": case "ArrowRight": next = (index + 1) % tabs.length; break;
-    case "ArrowUp": case "ArrowLeft": next = (index - 1 + tabs.length) % tabs.length; break;
+    case "ArrowDown":
+      if (horizontal) return;
+      next = index + 1;
+      break;
+    case "ArrowUp":
+      if (horizontal) return;
+      next = index - 1;
+      break;
+    case "ArrowRight":
+      if (!horizontal) return;
+      next = index + (rtl ? -1 : 1);
+      break;
+    case "ArrowLeft":
+      if (!horizontal) return;
+      next = index + (rtl ? 1 : -1);
+      break;
     case "Home": next = 0; break;
     case "End": next = tabs.length - 1; break;
     default: return;
   }
   event.preventDefault();
-  showTab(tabs[next].dataset.tab, true);
+  showTab(tabs[(next + tabs.length) % tabs.length].dataset.tab, true);
 });
 
-function setStatus(id, message, tone = "") {
+function renderStatus(id) {
+  const { key, tone, value, detail } = statuses.get(id);
   const target = byId(id);
-  target.textContent = message;
+  target.textContent = activeLanguage === "english" && detail ? detail : (key ? translate(key, value) : "");
   target.dataset.tone = tone;
 }
 
-function errorMessage(error, fallback) {
-  if (typeof error === "string" && error) return error;
-  return error instanceof Error ? error.message : fallback;
+function setStatus(id, key, tone = "", value, detail) {
+  statuses.set(id, { key, tone, value, detail });
+  renderStatus(id);
+}
+
+function setError(id, key, error) {
+  console.error(error);
+  const detail = error instanceof Error ? error.message : (typeof error === "string" ? error : "");
+  setStatus(id, key, "error", undefined, detail);
 }
 
 function toHex(value) {
@@ -73,20 +127,23 @@ function toHex(value) {
 }
 
 function setAdapterChoices() {
-  controls.network.adapter.replaceChildren(new Option("Automatic", ""));
+  const select = controls.network.adapter;
+  select.replaceChildren(new Option(translate("automatic"), ""));
   const previous = settings.adapter;
   let hadSelection = !previous;
   for (const adapter of state.adapters) {
     const oldSelection = adapter.id.toLowerCase() === previous.toLowerCase();
     if (oldSelection) hadSelection = true;
-    const status = adapter.connected ? "" : " (disconnected)";
-    controls.network.adapter.add(new Option(`${adapter.name}${status}`, oldSelection ? previous : adapter.id));
+    const label = adapter.connected ? adapter.name : translate("disconnectedAdapter", adapter.name);
+    select.add(new Option(label, oldSelection ? previous : adapter.id));
   }
-  if (!hadSelection) controls.network.adapter.add(new Option("Previously selected adapter (unavailable)", previous));
+  if (!hadSelection) select.add(new Option(translate("unavailableAdapter"), previous));
+  select.value = previous;
 }
 
 function writeControls() {
   const { display, network, colors } = controls;
+  controls.language.value = settings.language;
   display.graph.value = settings.graph ? "graph" : "numbers";
   display.visible.checked = settings.visible;
   display.width.value = settings.width;
@@ -107,15 +164,16 @@ function hasChanges() {
 }
 
 function updateControls() {
+  applyLanguage(settings.language);
   const dirty = hasChanges();
   byId("graph-width-row").hidden = !settings.graph;
   byId("text-size-row").hidden = settings.graph;
-  byId("width-value").textContent = `${settings.width} px`;
+  byId("width-value").textContent = translate("pixels", settings.width);
   byId("reset-position").disabled = settings.offset === 0;
   byId("reset-colors").disabled = !settings.customUp && !settings.customDown;
   byId("save-settings").disabled = settingsBusy || !dirty;
   byId("cancel-settings").disabled = settingsBusy;
-  byId("cancel-settings").textContent = dirty ? "Cancel" : "Close";
+  byId("cancel-settings").textContent = translate(dirty ? "cancel" : "close");
   updateReleaseControls();
   if (activeTab === "display") renderPreview();
 }
@@ -125,6 +183,7 @@ form.addEventListener("input", (event) => {
   const input = event.target;
   const { display, network, colors } = controls;
   Object.assign(settings, {
+    language: controls.language.value,
     graph: display.graph.value === "graph",
     visible: display.visible.checked,
     width: Number(display.width.value),
@@ -157,8 +216,8 @@ byId("reset-position").addEventListener("click", () => {
   updateControls();
 });
 byId("restore-defaults").addEventListener("click", () => {
-  settings = { ...state.defaults, schema: settings.schema };
-  setStatus("settings-status", "Defaults restored for this draft.");
+  settings = { ...state.defaults, schema: settings.schema, language: settings.language };
+  setStatus("settings-status", "defaultsRestored");
   writeControls();
 });
 
@@ -168,18 +227,18 @@ form.addEventListener("submit", async (event) => {
   settingsBusy = true;
   const draft = { ...settings };
   const startupEnabled = controls.startup.checked;
-  setStatus("settings-status", "Saving changes…");
+  setStatus("settings-status", "savingChanges");
   updateControls();
   try {
     if (invoke) await invoke("save_settings", { settings: draft, startupEnabled });
     savedSettings = draft;
     savedStartup = startupEnabled;
-    setStatus("settings-status", invoke ? "Changes saved." : "Preview changes saved for this session.", "success");
+    setStatus("settings-status", invoke ? "changesSaved" : "previewChangesSaved", "success");
     if (availableVersion && !updateBusy && !hasChanges()) {
-      setStatus("update-status", `NetBar ${availableVersion} is available.`, "success");
+      setStatus("update-status", "updateAvailable", "success", availableVersion);
     }
   } catch (error) {
-    setStatus("settings-status", errorMessage(error, "Could not save settings."), "error");
+    setError("settings-status", "saveFailed", error);
   } finally {
     settingsBusy = false;
     updateControls();
@@ -198,7 +257,7 @@ async function closeSettings() {
   try {
     await invoke("close_settings");
   } catch (error) {
-    setStatus("settings-status", errorMessage(error, "Could not close settings."), "error");
+    setError("settings-status", "closeFailed", error);
   }
 }
 
@@ -212,10 +271,10 @@ function updateReleaseControls() {
   byId("check-updates").disabled = !allowed || updateBusy;
   byId("install-update").hidden = !availableVersion;
   byId("install-update").disabled = !allowed || updateBusy || settingsBusy || hasChanges();
-  byId("install-update").title = hasChanges() ? "Save changes before installing the update" : "";
+  byId("install-update").title = hasChanges() ? translate("saveBeforeInstalling") : "";
 }
 
-async function runUpdateAction(message, callback) {
+async function runUpdateAction(message, failed, callback) {
   if (!state?.updatesAllowed || updateBusy) return;
   updateBusy = true;
   setStatus("update-status", message);
@@ -223,7 +282,7 @@ async function runUpdateAction(message, callback) {
   try {
     await callback();
   } catch (error) {
-    setStatus("update-status", errorMessage(error, "The update action could not finish."), "error");
+    setError("update-status", failed, error);
   } finally {
     updateBusy = false;
     updateReleaseControls();
@@ -231,24 +290,23 @@ async function runUpdateAction(message, callback) {
 }
 
 byId("check-updates").addEventListener("click", () => {
-  runUpdateAction("Checking for updates…", async () => {
+  runUpdateAction("checkingUpdates", "checkFailed", async () => {
     availableVersion = null;
     const release = await invoke("check_updates");
     availableVersion = release.version;
     if (availableVersion) {
-      const next = `NetBar ${availableVersion} is available.`;
-      setStatus("update-status", hasChanges() ? `${next} Save changes before installing.` : next, "success");
+      setStatus("update-status", hasChanges() ? "updateAvailableSave" : "updateAvailable", "success", availableVersion);
     } else {
-      setStatus("update-status", "NetBar is up to date.", "success");
+      setStatus("update-status", "upToDate", "success");
     }
   });
 });
 byId("install-update").addEventListener("click", () => {
   if (!availableVersion || hasChanges()) return;
-  runUpdateAction("Downloading and verifying the installer…", async () => {
+  runUpdateAction("downloadingUpdate", "installFailed", async () => {
     await invoke("install_update");
     availableVersion = null;
-    setStatus("update-status", "The verified installer has started.", "success");
+    setStatus("update-status", "installerStarted", "success");
   });
 });
 
@@ -366,25 +424,24 @@ async function initialize() {
   try {
     state = invoke ? await invoke("settings_state") : {
       settings: defaultSettings, defaults: defaultSettings, adapters: [], startupEnabled: false,
-      startupAllowed: false, updatesAllowed: false, version: "2.2.1", preview: true,
+      startupAllowed: false, updatesAllowed: false, version: "2.3.0", preview: true,
     };
-    settings = { ...state.settings };
+    settings = { ...state.settings, language: state.settings.language === "persian" ? "persian" : "english" };
     savedSettings = { ...settings };
     savedStartup = state.startupEnabled;
     controls.startup.checked = savedStartup;
     controls.startup.disabled = !state.startupAllowed;
-    byId("sidebar-version").textContent = `Version ${state.version}`;
-    byId("installed-version").textContent = `NetBar ${state.version}`;
-    setStatus("update-status", state.updatesAllowed ? "" : "Updates are available when NetBar is installed with its MSI.");
-    setAdapterChoices();
+    byId("installed-version-value").textContent = `NetBar ${state.version}`;
     writeControls();
+    setStatus("update-status", state.updatesAllowed ? "" : "updatesUnavailable");
     workspace.inert = false;
   } catch (error) {
+    applyLanguage(settings?.language ?? "english");
     workspace.inert = false;
     for (const control of form.elements) control.disabled = true;
-    setStatus("settings-status", errorMessage(error, "Could not load NetBar settings."), "error");
+    setError("settings-status", "loadFailed", error);
     byId("cancel-settings").disabled = false;
-    byId("cancel-settings").textContent = "Close";
+    byId("cancel-settings").textContent = translate("close");
     byId("cancel-settings").addEventListener("click", () => invoke?.("close_settings"), { once: true });
   } finally {
     workspace.setAttribute("aria-busy", "false");

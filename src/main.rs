@@ -9,7 +9,7 @@ mod widget;
 mod widget_window;
 
 use network::{Monitor, RateLabel, Rates};
-use preferences::Settings;
+use preferences::{Language, Settings};
 use std::{
     cell::{Cell, RefCell},
     ffi::OsString,
@@ -109,7 +109,7 @@ impl Options {
 
 fn main() {
     if let Err(error) = run() {
-        show_error(&error.to_string());
+        show_error(&error.to_string(), Language::default());
         std::process::exit(1);
     }
 }
@@ -320,10 +320,12 @@ fn diagnostics(config: &Path, report: &Path) -> io::Result<()> {
 struct Tray {
     icon: Option<TrayIcon<Wry>>,
     menu: Menu<Wry>,
+    preferences: MenuItem<Wry>,
     visible: CheckMenuItem<Wry>,
     locked: CheckMenuItem<Wry>,
     paused: CheckMenuItem<Wry>,
     reset: MenuItem<Wry>,
+    quit: MenuItem<Wry>,
 }
 
 const ACTION_SHOW: usize = 1;
@@ -331,13 +333,37 @@ const ACTION_LOCK: usize = 2;
 const ACTION_RESET: usize = 3;
 const ACTION_TOGGLE_PAUSE: usize = 4;
 
+struct TrayLabels {
+    preferences: &'static str,
+    visible: &'static str,
+    locked: &'static str,
+    paused: &'static str,
+    reset: &'static str,
+    quit: &'static str,
+}
+
+impl TrayLabels {
+    fn for_language(language: Language) -> Self {
+        Self {
+            preferences: language.text("Settings…", "تنظیمات…"),
+            visible: language.text("Show on taskbar", "نمایش در نوار وظیفه"),
+            locked: language.text("Lock position", "قفل کردن موقعیت"),
+            paused: language.text("Pause readings", "توقف نمایش سرعت"),
+            reset: language.text("Reset position", "بازنشانی موقعیت"),
+            quit: language.text("Exit NetBar", "خروج از نت‌بار"),
+        }
+    }
+}
+
 impl Tray {
     fn new(app: &AppHandle, control: HWND, settings: &Settings) -> tauri::Result<Self> {
-        let preferences = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
+        let labels = TrayLabels::for_language(settings.language);
+        let preferences =
+            MenuItem::with_id(app, "settings", labels.preferences, true, None::<&str>)?;
         let visible = CheckMenuItem::with_id(
             app,
             "visible",
-            "Show on taskbar",
+            labels.visible,
             true,
             settings.visible,
             None::<&str>,
@@ -345,7 +371,7 @@ impl Tray {
         let locked = CheckMenuItem::with_id(
             app,
             "locked",
-            "Lock position",
+            labels.locked,
             true,
             settings.locked,
             None::<&str>,
@@ -353,13 +379,13 @@ impl Tray {
         let reset = MenuItem::with_id(
             app,
             "reset",
-            "Reset position",
+            labels.reset,
             settings.offset != 0,
             None::<&str>,
         )?;
         let paused =
-            CheckMenuItem::with_id(app, "paused", "Pause readings", true, false, None::<&str>)?;
-        let quit = MenuItem::with_id(app, "quit", "Exit NetBar", true, None::<&str>)?;
+            CheckMenuItem::with_id(app, "paused", labels.paused, true, false, None::<&str>)?;
+        let quit = MenuItem::with_id(app, "quit", labels.quit, true, None::<&str>)?;
         let menu = Menu::with_items(
             app,
             &[
@@ -391,10 +417,12 @@ impl Tray {
         Ok(Self {
             icon: None,
             menu,
+            preferences,
             visible,
             locked,
             paused,
             reset,
+            quit,
         })
     }
 
@@ -432,6 +460,16 @@ impl Tray {
         let _ = self
             .reset
             .set_enabled(settings.offset != 0 && !settings_open);
+    }
+
+    fn set_language(&self, language: Language) {
+        let labels = TrayLabels::for_language(language);
+        let _ = self.preferences.set_text(labels.preferences);
+        let _ = self.visible.set_text(labels.visible);
+        let _ = self.locked.set_text(labels.locked);
+        let _ = self.paused.set_text(labels.paused);
+        let _ = self.reset.set_text(labels.reset);
+        let _ = self.quit.set_text(labels.quit);
     }
 }
 
@@ -615,7 +653,10 @@ impl App {
         if let Err(error) =
             settings_window::open(&self.ui, self.path.clone(), self.hwnd as usize, self.custom)
         {
-            show_error(&format!("NetBar settings could not open. {error}"));
+            let language = self.settings.language;
+            let message =
+                language.text("NetBar settings could not open.", "تنظیمات نت‌بار باز نشد.");
+            show_error(&format!("{message}\n{error}"), language);
             return;
         }
         self.set_settings_open(true);
@@ -636,6 +677,7 @@ impl App {
         }
         let interval_changed = self.settings.interval != settings.interval;
         let adapter_changed = self.settings.adapter != settings.adapter;
+        let language_changed = self.settings.language != settings.language;
         self.settings = settings;
         self.light_text = preferences::light_text(self.settings.theme);
         if interval_changed {
@@ -643,6 +685,9 @@ impl App {
         }
         if adapter_changed && self.is_sampling() {
             self.prime_network();
+        }
+        if language_changed {
+            self.tray.set_language(self.settings.language);
         }
         self.tray.sync(&self.settings, self.settings_open);
         self.refresh_widget(true);
@@ -668,7 +713,12 @@ impl App {
             Ok(()) => self.apply(settings),
             Err(error) => {
                 self.tray.sync(&self.settings, self.settings_open);
-                show_error(&format!("Could not save NetBar settings. {error}"));
+                let language = self.settings.language;
+                let message = language.text(
+                    "Could not save NetBar settings.",
+                    "تنظیمات نت‌بار ذخیره نشد.",
+                );
+                show_error(&format!("{message}\n{error}"), language);
             }
         }
     }
@@ -709,7 +759,12 @@ impl App {
             self.settings.offset = drag.offset;
         } else if let Err(error) = self.settings.save(&self.path) {
             self.settings.offset = drag.offset;
-            show_error(&format!("Could not save the taskbar position. {error}"));
+            let language = self.settings.language;
+            let message = language.text(
+                "Could not save the taskbar position.",
+                "موقعیت روی نوار وظیفه ذخیره نشد.",
+            );
+            show_error(&format!("{message}\n{error}"), language);
         }
         self.tray.sync(&self.settings, self.settings_open);
         self.refresh_widget(true);
@@ -778,14 +833,18 @@ impl App {
     }
 }
 
-fn show_error(message: &str) {
+fn show_error(message: &str, language: Language) {
     // A native error is also available when the system WebView cannot start.
+    let direction = match language {
+        Language::English => 0,
+        Language::Persian => MB_RIGHT | MB_RTLREADING,
+    };
     unsafe {
         MessageBoxW(
             null_mut(),
             wide(message).as_ptr(),
             WINDOW_TITLE,
-            MB_OK | MB_ICONERROR,
+            MB_OK | MB_ICONERROR | direction,
         );
     }
 }

@@ -102,6 +102,7 @@ pub fn open(app: &AppHandle, path: PathBuf, owner: usize, custom: bool) -> io::R
         return window.set_focus().map_err(io::Error::other);
     }
 
+    let title = settings_title(Settings::load(&path).language);
     let id = runtime.counter.fetch_add(1, Ordering::Relaxed);
     {
         let mut state = runtime
@@ -120,7 +121,7 @@ pub fn open(app: &AppHandle, path: PathBuf, owner: usize, custom: bool) -> io::R
     }
 
     let creation = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("index.html".into()))
-        .title("NetBar settings")
+        .title(title)
         .inner_size(940.0, 680.0)
         .min_inner_size(740.0, 560.0)
         .center()
@@ -156,6 +157,10 @@ pub fn open(app: &AppHandle, path: PathBuf, owner: usize, custom: bool) -> io::R
     let _ = window.set_focus();
     notify_parent(owner, crate::SETTINGS_OPENED, hwnd);
     Ok(())
+}
+
+fn settings_title(language: preferences::Language) -> &'static str {
+    language.text("NetBar settings", "تنظیمات NetBar")
 }
 
 fn clear_session(runtime: &SettingsRuntime, id: u64) {
@@ -213,14 +218,7 @@ fn settings_state(
         )
     };
     let settings = Settings::load(&path);
-    let mut adapters = network::adapters();
-    if !settings.adapter.is_empty()
-        && !adapters
-            .iter()
-            .any(|adapter| adapter.id.eq_ignore_ascii_case(&settings.adapter))
-    {
-        adapters.push(network::Adapter::missing(settings.adapter.clone()));
-    }
+    let adapters = network::adapters();
 
     Ok(SettingsSnapshot {
         defaults: Settings {
@@ -251,8 +249,8 @@ fn save_settings(
     mut settings: Settings,
     startup_enabled: Option<bool>,
 ) -> Result<(), String> {
-    let session = session(&window, &state)?;
-    let session = session.as_ref().expect("settings session checked");
+    let guard = session(&window, &state)?;
+    let session = guard.as_ref().expect("settings session checked");
     let previous = Settings::load(&session.path);
     settings.schema = previous.schema;
     if settings.adapter != previous.adapter
@@ -275,6 +273,10 @@ fn save_settings(
         return Err(format!("Could not save NetBar settings. {error}"));
     }
     notify_parent(session.owner, crate::SETTINGS_RELOAD, 0);
+    drop(guard);
+    if settings.language != previous.language {
+        let _ = window.set_title(settings_title(settings.language));
+    }
     Ok(())
 }
 

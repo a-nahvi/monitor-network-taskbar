@@ -11,6 +11,27 @@ use windows_sys::Win32::{
 };
 use windows_sys::w;
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Language {
+    #[default]
+    English,
+    Persian,
+}
+
+impl Language {
+    pub fn text(self, english: &'static str, persian: &'static str) -> &'static str {
+        match self {
+            Self::English => english,
+            Self::Persian => persian,
+        }
+    }
+
+    fn ini_value(self) -> &'static str {
+        self.text("english", "persian")
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -29,6 +50,8 @@ pub struct Settings {
     pub up_color: u32,
     pub down_color: u32,
     pub adapter: String,
+    #[serde(default)]
+    pub language: Language,
 }
 
 impl Default for Settings {
@@ -49,6 +72,7 @@ impl Default for Settings {
             up_color: 0xFFAB45,
             down_color: 0x42C2FF,
             adapter: String::new(),
+            language: Language::default(),
         }
     }
 }
@@ -76,16 +100,19 @@ impl Settings {
         let int = |key, default| unsafe {
             GetPrivateProfileIntW(w!("NetBar"), key, default, path.as_ptr()) as i32
         };
-        let mut adapter = [0u16; 80];
-        let chars = unsafe {
-            GetPrivateProfileStringW(
-                w!("NetBar"),
-                w!("AdapterId"),
-                w!(""),
-                adapter.as_mut_ptr(),
-                adapter.len() as u32,
-                path.as_ptr(),
-            )
+        let string = |key| {
+            let mut buffer = [0u16; 80];
+            let chars = unsafe {
+                GetPrivateProfileStringW(
+                    w!("NetBar"),
+                    key,
+                    w!(""),
+                    buffer.as_mut_ptr(),
+                    buffer.len() as u32,
+                    path.as_ptr(),
+                )
+            };
+            String::from_utf16_lossy(&buffer[..chars as usize])
         };
         let mut settings = Self {
             schema: int(w!("SchemaVersion"), 1),
@@ -102,7 +129,13 @@ impl Settings {
             custom_down: int(w!("CustomDownloadColor"), 0) != 0,
             up_color: int(w!("UploadColor"), 0xFFAB45) as u32,
             down_color: int(w!("DownloadColor"), 0x42C2FF) as u32,
-            adapter: String::from_utf16_lossy(&adapter[..chars as usize]),
+            adapter: string(w!("AdapterId")),
+            language: if string(w!("Language")).eq_ignore_ascii_case(Language::Persian.ini_value())
+            {
+                Language::Persian
+            } else {
+                Language::English
+            },
         };
         settings.validate();
         settings
@@ -146,7 +179,10 @@ impl Settings {
         for (key, value) in key_values
             .into_iter()
             .map(|(k, v)| (k, v.to_string()))
-            .chain(std::iter::once(("AdapterId", self.adapter.clone())))
+            .chain([
+                ("AdapterId", self.adapter.clone()),
+                ("Language", self.language.ini_value().to_owned()),
+            ])
         {
             if unsafe {
                 WritePrivateProfileStringW(
@@ -251,4 +287,55 @@ pub fn installed() -> bool {
                 .to_string_lossy()
                 .eq_ignore_ascii_case(&running.to_string_lossy())
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_and_invalid_preferences_use_english() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("NetBar.ini");
+        for contents in [
+            "[NetBar]\r\nIntervalMs=2000\r\n",
+            "[NetBar]\r\nIntervalMs=2000\r\nLanguage=unknown\r\n",
+        ] {
+            fs::write(&path, contents).unwrap();
+            let settings = Settings::load(&path);
+            assert_eq!(settings.language, Language::English);
+            assert_eq!(settings.interval, 2000);
+        }
+    }
+
+    #[test]
+    fn language_round_trips_through_ipc_and_ini_without_losing_other_values() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("NetBar.ini");
+        fs::write(
+            &path,
+            "[NetBar]\r\nSchemaVersion=7\r\nFutureFeature=keep me\r\n[Other]\r\nOwner=preserve\r\n",
+        )
+        .unwrap();
+
+        let mut settings = Settings::load(&path);
+        for (language, value) in [
+            (Language::Persian, "persian"),
+            (Language::English, "english"),
+        ] {
+            settings.language = language;
+            let payload = serde_json::to_value(&settings).unwrap();
+            assert_eq!(payload["language"], value);
+            let received: Settings = serde_json::from_value(payload).unwrap();
+            received.save(&path).unwrap();
+
+            let reloaded = Settings::load(&path);
+            assert_eq!(reloaded.language, language);
+            assert_eq!(reloaded.schema, 7);
+            let contents = fs::read_to_string(&path).unwrap();
+            assert!(contents.contains(&format!("Language={value}")));
+            assert!(contents.contains("FutureFeature=keep me"));
+            assert!(contents.contains("[Other]\r\nOwner=preserve"));
+        }
+    }
 }

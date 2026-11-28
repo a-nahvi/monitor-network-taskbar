@@ -1,11 +1,12 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" dir="ltr">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>NetBar Settings</title>
   <link rel="stylesheet" href="styles.css">
+  <script src="locales.js" defer></script>
   <script src="app.js" defer></script>
 </head>
 <body>
@@ -16,22 +17,22 @@
           <span class="icon icon-numbers" aria-hidden="true"></span>
           <img id="app-icon" src="icon.png" alt="" hidden>
         </span>
-        <div><strong>NetBar</strong><span>Settings</span></div>
+        <div><strong lang="en">NetBar</strong><span data-i18n="settings"></span></div>
       </div>
 
-      <nav class="navigation" role="tablist" aria-label="Settings sections" aria-orientation="vertical">
+      <nav class="navigation" role="tablist" data-i18n-label="settingsSections" aria-orientation="vertical">
         <button type="button" id="tab-display" class="nav-item" role="tab" aria-selected="true" aria-controls="panel-display" data-tab="display">
-          <span class="icon icon-display" aria-hidden="true"></span> Display
+          <span class="icon icon-display" aria-hidden="true"></span><span data-i18n="display"></span>
         </button>
         <button type="button" id="tab-network" class="nav-item" role="tab" aria-selected="false" aria-controls="panel-network" data-tab="network" tabindex="-1">
-          <span class="icon icon-network" aria-hidden="true"></span> Network
+          <span class="icon icon-network" aria-hidden="true"></span><span data-i18n="network"></span>
         </button>
         <button type="button" id="tab-updates" class="nav-item" role="tab" aria-selected="false" aria-controls="panel-updates" data-tab="updates" tabindex="-1">
-          <span class="icon icon-updates" aria-hidden="true"></span> Updates
+          <span class="icon icon-updates" aria-hidden="true"></span><span data-i18n="updates"></span>
         </button>
       </nav>
 
-      <div class="sidebar-footer" id="sidebar-version" aria-label="NetBar version"></div>
+      <div class="sidebar-footer" id="sidebar-version" data-i18n-label="netbarVersion"></div>
     </aside>
 
     <main class="workspace" id="workspace" aria-busy="true">
@@ -39,13 +40,13 @@
         <div class="scroll-area" id="scroll-area">
           <section id="panel-display" class="panel" role="tabpanel" aria-labelledby="tab-display">
             <header class="page-header">
-              <h1>Taskbar display</h1>
-              <p>Choose what NetBar shows beside the Windows tray.</p>
+              <h1 data-i18n="taskbarDisplay"></h1>
+              <p data-i18n="displayDescription"></p>
             </header>
 
             <figure class="preview" aria-labelledby="preview-label">
-              <figcaption id="preview-label"><span class="icon icon-display" aria-hidden="true"></span> Taskbar preview</figcaption>
-              <div class="preview-track" id="preview-track" aria-hidden="true">
+              <figcaption id="preview-label"><span class="icon icon-display" aria-hidden="true"></span><span data-i18n="taskbarPreview"></span></figcaption>
+              <div class="preview-track" id="preview-track" aria-hidden="true" dir="ltr">
                 <div class="preview-widget" id="preview-widget">
                   <div class="preview-rates" id="preview-rates">
                     <span class="rate-upload">
@@ -69,48 +70,52 @@
 
             <div class="rows">
               <div class="setting-row">
-                <span id="layout-label" class="field-label">Layout</span>
+                <label class="field-label" for="language" data-i18n="language"></label>
+                <select id="language"><option value="english" lang="en">English</option><option value="persian" lang="fa">فارسی</option></select>
+              </div>
+              <div class="setting-row">
+                <span id="layout-label" class="field-label" data-i18n="layout"></span>
                 <div class="segmented" role="group" aria-labelledby="layout-label">
-                  <label><input type="radio" name="layout" value="numbers" checked><span><span class="icon icon-numbers" aria-hidden="true"></span> Numbers</span></label>
-                  <label><input type="radio" name="layout" value="graph"><span><span class="icon icon-graph" aria-hidden="true"></span> Graph</span></label>
+                  <label><input type="radio" name="layout" value="numbers" checked><span><span class="icon icon-numbers" aria-hidden="true"></span><span data-i18n="numbers"></span></span></label>
+                  <label><input type="radio" name="layout" value="graph"><span><span class="icon icon-graph" aria-hidden="true"></span><span data-i18n="graph"></span></span></label>
                 </div>
               </div>
               <div class="setting-row">
-                <label class="field-label" for="widget-visible">Show on taskbar</label>
+                <label class="field-label" for="widget-visible" data-i18n="showOnTaskbar"></label>
                 <input class="toggle" type="checkbox" id="widget-visible" checked>
               </div>
               <div class="setting-row" id="graph-width-row" hidden>
-                <label class="field-label" for="graph-width">Graph width</label>
+                <label class="field-label" for="graph-width" data-i18n="graphWidth"></label>
                 <div class="range-control">
                   <input id="graph-width" type="range" min="64" max="200" step="1" value="88">
                   <output for="graph-width" id="width-value">88 px</output>
                 </div>
               </div>
               <div class="setting-row" id="text-size-row">
-                <label class="field-label" for="text-size">Text size</label>
-                <select id="text-size"><option value="11">Small</option><option value="12" selected>Normal</option><option value="14">Large</option></select>
+                <label class="field-label" for="text-size" data-i18n="textSize"></label>
+                <select id="text-size"><option value="11" data-i18n="small"></option><option value="12" data-i18n="normal" selected></option><option value="14" data-i18n="large"></option></select>
               </div>
               <div class="setting-row" id="text-color-row">
-                <label class="field-label" for="text-color">Text color</label>
-                <select id="text-color"><option value="0">Follow Windows</option><option value="1">Light text</option><option value="2">Dark text</option></select>
+                <label class="field-label" for="text-color" data-i18n="textColor"></label>
+                <select id="text-color"><option value="0" data-i18n="followWindows"></option><option value="1" data-i18n="lightText"></option><option value="2" data-i18n="darkText"></option></select>
               </div>
               <div class="setting-row color-row">
-                <span class="field-label" id="colors-label">Rate colors</span>
+                <span class="field-label" id="colors-label" data-i18n="rateColors"></span>
                 <div class="color-controls" role="group" aria-labelledby="colors-label">
-                  <label class="color-chip"><input type="color" id="upload-color" value="#ffab45" aria-label="Upload color"><span>Upload</span></label>
-                  <label class="color-chip"><input type="color" id="download-color" value="#42c2ff" aria-label="Download color"><span>Download</span></label>
-                  <button class="text-button" type="button" id="reset-colors">Reset</button>
+                  <label class="color-chip"><input type="color" id="upload-color" value="#ffab45" data-i18n-label="uploadColor"><span data-i18n="upload"></span></label>
+                  <label class="color-chip"><input type="color" id="download-color" value="#42c2ff" data-i18n-label="downloadColor"><span data-i18n="download"></span></label>
+                  <button class="text-button" type="button" id="reset-colors" data-i18n="reset"></button>
                 </div>
               </div>
               <div class="setting-row">
-                <label class="field-label" for="position-locked">Lock position</label>
+                <label class="field-label" for="position-locked" data-i18n="lockPosition"></label>
                 <div class="position-controls">
-                  <button class="text-button" type="button" id="reset-position">Reset position</button>
+                  <button class="text-button" type="button" id="reset-position" data-i18n="resetPosition"></button>
                   <input class="toggle" type="checkbox" id="position-locked" checked>
                 </div>
               </div>
               <div class="setting-row">
-                <label class="field-label" for="start-windows">Start with Windows</label>
+                <label class="field-label" for="start-windows" data-i18n="startWithWindows"></label>
                 <input class="toggle" type="checkbox" id="start-windows">
               </div>
             </div>
@@ -118,46 +123,46 @@
 
           <section id="panel-network" class="panel" role="tabpanel" aria-labelledby="tab-network" hidden>
             <header class="page-header">
-              <h1>Network</h1>
-              <p>Choose the connection NetBar measures and how it reports speed.</p>
+              <h1 data-i18n="network"></h1>
+              <p data-i18n="networkDescription"></p>
             </header>
             <div class="rows">
               <div class="setting-row">
-                <div><label class="field-label" for="adapter">Network adapter</label><p class="field-help" id="adapter-help">Automatic prefers a connected physical adapter.</p></div>
-                <select id="adapter" aria-describedby="adapter-help"><option value="">Automatic</option></select>
+                <div><label class="field-label" for="adapter" data-i18n="networkAdapter"></label><p class="field-help" id="adapter-help" data-i18n="adapterHelp"></p></div>
+                <select id="adapter" aria-describedby="adapter-help"></select>
               </div>
               <div class="setting-row">
-                <label class="field-label" for="speed-units">Speed units</label>
-                <select id="speed-units"><option value="bytes">Bytes per second</option><option value="bits">Bits per second</option></select>
+                <label class="field-label" for="speed-units" data-i18n="speedUnits"></label>
+                <select id="speed-units"><option value="bytes" data-i18n="bytesPerSecond"></option><option value="bits" data-i18n="bitsPerSecond"></option></select>
               </div>
               <div class="setting-row">
-                <label class="field-label" for="interval">Refresh interval</label>
-                <select id="interval"><option value="1000">1 second</option><option value="2000">2 seconds</option><option value="5000">5 seconds</option></select>
+                <label class="field-label" for="interval" data-i18n="refreshInterval"></label>
+                <select id="interval"><option value="1000" data-i18n="oneSecond"></option><option value="2000" data-i18n="twoSeconds"></option><option value="5000" data-i18n="fiveSeconds"></option></select>
               </div>
             </div>
           </section>
 
           <section id="panel-updates" class="panel" role="tabpanel" aria-labelledby="tab-updates" hidden>
             <header class="page-header">
-              <h1>Updates</h1>
-              <p>Check for and install verified Windows releases from GitHub.</p>
+              <h1 data-i18n="updates"></h1>
+              <p data-i18n="updatesDescription"></p>
             </header>
 
             <div class="release-card">
               <div class="release-icon" aria-hidden="true"><span class="icon icon-updates" aria-hidden="true"></span></div>
-              <div class="release-info"><h2>Installed version</h2><p id="installed-version">NetBar</p></div>
-              <button class="button secondary" type="button" id="check-updates">Check for updates</button>
-              <button class="button primary" type="button" id="install-update" hidden>Install update</button>
+              <div class="release-info"><h2 data-i18n="installedVersion"></h2><p id="installed-version"><bdi id="installed-version-value" dir="ltr" lang="en"></bdi></p></div>
+              <button class="button secondary" type="button" id="check-updates" data-i18n="checkForUpdates"></button>
+              <button class="button primary" type="button" id="install-update" data-i18n="installUpdate" hidden></button>
             </div>
             <p id="update-status" class="inline-status" role="status"></p>
           </section>
         </div>
 
         <footer class="actions">
-          <button class="text-button" type="button" id="restore-defaults">Restore defaults</button>
+          <button class="text-button" type="button" id="restore-defaults" data-i18n="restoreDefaults"></button>
           <span class="settings-status" id="settings-status" role="status"></span>
-          <button class="button secondary" type="button" id="cancel-settings">Cancel</button>
-          <button class="button primary" type="submit" id="save-settings">Save changes</button>
+          <button class="button secondary" type="button" id="cancel-settings" data-i18n="cancel"></button>
+          <button class="button primary" type="submit" id="save-settings" data-i18n="saveChanges"></button>
         </footer>
       </form>
     </main>

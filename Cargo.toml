@@ -1,6 +1,6 @@
 [package]
 name = "netbar"
-version = "2.2.1"
+version = "2.3.0"
 edition = "2024"
 rust-version = "1.90"
 default-run = "NetBar"
