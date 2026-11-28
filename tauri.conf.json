@@ -21,6 +21,7 @@
             "allow-save-settings",
             "allow-check-updates",
             "allow-install-update",
+            "allow-open-releases",
             "allow-close-settings"
           ]
         }

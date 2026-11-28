@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.4.0]
+
+- Open the controls on a right-click of the taskbar widget. The Start menu opens Settings even when the widget is hidden.
+- Keep readings paused until Resume is selected, including while opening or changing Settings.
+- Check for and download verified updates from public GitHub Releases without using the REST API.
+
 ## [2.3.1]
 
 - Smooth the edges of small numbers and units in the taskbar widget.
@@ -38,6 +44,7 @@
 - Rewrite NetBar in Rust and preserve upgrades from the original Windows installer.
 - Add update checking and verified MSI installation in Settings.
 
+[2.4.0]: https://github.com/a-nahvi/monitor-network-taskbar/releases/tag/v2.4.0
 [2.3.1]: https://github.com/a-nahvi/monitor-network-taskbar/releases/tag/v2.3.1
 [2.3.0]: https://github.com/a-nahvi/monitor-network-taskbar/releases/tag/v2.3.0
 [2.2.1]: https://github.com/a-nahvi/monitor-network-taskbar/releases/tag/v2.2.1

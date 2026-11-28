@@ -181,6 +181,17 @@ Owner=preserve
     Check ((Get-FileHash -LiteralPath $license -Algorithm SHA256).Hash -eq $licenseHash) 'upgrade installs the repository license byte-for-byte'
     Check ((Startup-Value) -eq $ownedStartup) 'upgrade preserves the startup choice'
     Check ((Get-FileHash -LiteralPath $config).Hash -eq $preferencesHash) 'upgrade preserves preferences and future fields byte-for-byte'
+    $shell = New-Object -ComObject WScript.Shell
+    try {
+        $shortcut = $shell.CreateShortcut($menu)
+        try {
+            Check ($shortcut.TargetPath -eq $app -and $shortcut.Arguments -eq '--settings') 'Start-menu shortcut opens settings while the widget is hidden'
+        } finally {
+            [Runtime.InteropServices.Marshal]::FinalReleaseComObject($shortcut) | Out-Null
+        }
+    } finally {
+        [Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) | Out-Null
+    }
     $diagnosticPath = Join-Path $testRoot 'upgraded-diagnostics.json'
     $diagnose = Start-Process -FilePath $app -ArgumentList ('--config "' + $config + '" --diagnose "' + $diagnosticPath + '"') `
         -WindowStyle Hidden -Wait -PassThru

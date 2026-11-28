@@ -13,7 +13,7 @@ Live upload and download rates next to the system tray on Windows 11 x64. Use co
 1. Download `NetBar-<version>-Setup-x64.msi` from the latest GitHub release and run it.
 2. After installation, open **Settings → Updates → Check for updates**. If an update is available, select **Install update**.
 
-Downloads and update checks use anonymous access to GitHub. If an older build reports a GitHub sign-in error, upgrade using the latest MSI. The per-user installer upgrades an existing MSI installation in place and preserves preferences and the Startup shortcut. Preferences are stored in `%LocalAppData%\NetBar\NetBar.ini`. To uninstall, open **Windows Settings → Apps → Installed apps**.
+Updates use the public GitHub Releases downloads. If an older build reports a rate limit or sign-in error, upgrade using the latest MSI. The per-user installer upgrades an existing MSI installation in place and preserves preferences and the Startup shortcut. Preferences are stored in `%LocalAppData%\NetBar\NetBar.ini`. To uninstall, open **Windows Settings → Apps → Installed apps**.
 
 NetBar checks the download size, SHA-256 digest, and MSI identity before opening Windows Installer. For a manual download, compare the output below with `NetBar-<version>-SHA256.txt`, included with releases from 2.2.1 onward.
 
@@ -23,9 +23,9 @@ Get-FileHash -Algorithm SHA256 -Path .\NetBar-*-Setup-x64.msi
 
 ## Use NetBar
 
-- **Right-click** the widget to pause or resume readings. Upload is the top row and download is the bottom row.
-- **Double-click** the widget or select **Settings** from the tray menu. Use **Display** for the layout, colors, position, and startup. Unlock the widget to drag it along the taskbar.
-- Choose English or Persian under **Display → Language**, then select **Save changes**. The settings layout switches direction as soon as you choose a language. The tray menu uses your saved language.
+- **Right-click** the widget to open its menu and choose **Pause readings** or **Resume readings**. Upload is the top row and download is the bottom row.
+- **Double-click** the widget or choose **Settings** from its menu. If the widget is hidden, open **NetBar** from the Windows Start menu. Use **Display** for the layout, colors, position, and startup. Unlock the widget to drag it along the taskbar.
+- Choose English or Persian under **Display → Language**, then select **Save changes**. The settings layout switches direction as soon as you choose a language. The widget menu uses your saved language.
 - Use **Network** to select an adapter, change the refresh interval, or switch between bytes and bits per second. Automatic selection prefers an active physical adapter to avoid double-counting VPN traffic.
 
 The widget runs on the primary horizontal taskbar. It hides over fullscreen applications and when the taskbar moves out of view. Opening Settings loads the Microsoft Edge WebView2 Runtime included with Windows 11. [Microsoft Edge WebView2](https://developer.microsoft.com/microsoft-edge/webview2/)

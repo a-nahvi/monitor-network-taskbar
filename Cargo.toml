@@ -1,6 +1,6 @@
 [package]
 name = "netbar"
-version = "2.3.1"
+version = "2.4.0"
 edition = "2024"
 rust-version = "1.90"
 default-run = "NetBar"
@@ -17,7 +17,7 @@ path = "src/main.rs"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-tauri = { version = "=2.12.7", default-features = false, features = ["wry", "custom-protocol", "tray-icon", "unstable"] }
+tauri = { version = "=2.12.7", default-features = false, features = ["wry", "custom-protocol", "unstable"] }
 tempfile = "3"
 windows = { version = "0.62.2", features = ["Win32_Foundation"] }
 windows-sys = { version = "0.61.2", features = [

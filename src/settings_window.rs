@@ -82,6 +82,7 @@ pub fn builder() -> tauri::Builder<Wry> {
             save_settings,
             check_updates,
             install_update,
+            open_releases,
             close_settings,
         ])
 }
@@ -90,7 +91,7 @@ pub fn context() -> tauri::Context<Wry> {
     tauri::tauri_build_context!()
 }
 
-pub fn open(app: &AppHandle, path: PathBuf, owner: usize, custom: bool) -> io::Result<()> {
+pub fn open(app: &AppHandle, path: PathBuf, owner: usize, custom: bool) -> io::Result<usize> {
     let runtime = app.state::<SettingsRuntime>();
     let _gate = runtime
         .window_gate
@@ -99,7 +100,11 @@ pub fn open(app: &AppHandle, path: PathBuf, owner: usize, custom: bool) -> io::R
     if let Some(window) = app.get_webview_window(LABEL) {
         window.unminimize().map_err(io::Error::other)?;
         window.show().map_err(io::Error::other)?;
-        return window.set_focus().map_err(io::Error::other);
+        window.set_focus().map_err(io::Error::other)?;
+        return window
+            .hwnd()
+            .map(|handle| handle.0 as usize)
+            .map_err(io::Error::other);
     }
 
     let title = settings_title(Settings::load(&path).language);
@@ -155,8 +160,7 @@ pub fn open(app: &AppHandle, path: PathBuf, owner: usize, custom: bool) -> io::R
         return Err(io::Error::other(error));
     }
     let _ = window.set_focus();
-    notify_parent(owner, crate::SETTINGS_OPENED, hwnd);
-    Ok(())
+    Ok(hwnd)
 }
 
 fn settings_title(language: preferences::Language) -> &'static str {
@@ -297,6 +301,12 @@ fn require_updates(session: &Session) -> Result<(), String> {
     } else {
         Err("Install NetBar with its MSI to update from this window.".into())
     }
+}
+
+#[tauri::command]
+fn open_releases(window: WebviewWindow, state: State<'_, SettingsRuntime>) -> Result<(), String> {
+    drop(session(&window, &state)?);
+    update::open_releases()
 }
 
 #[tauri::command]
