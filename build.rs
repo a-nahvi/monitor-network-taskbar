@@ -1,10 +1,8 @@
 const COMMANDS: &[&str] = &[
     "settings_state",
     "save_settings",
-    "configure_updates",
     "check_updates",
     "install_update",
-    "open_token_page",
     "close_settings",
 ];
 

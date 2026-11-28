@@ -1,13 +1,12 @@
 use crate::{
     network,
     preferences::{self, Settings},
-    startup, update, wide,
+    startup, update,
 };
 use serde::Serialize;
 use std::{
     io,
     path::PathBuf,
-    ptr::null_mut,
     sync::{
         Arc, Mutex, MutexGuard,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -17,17 +16,10 @@ use tauri::{
     AppHandle, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent, Wry,
     webview::NewWindowResponse,
 };
-use windows_sys::{
-    Win32::{
-        Foundation::HWND,
-        UI::{
-            Shell::ShellExecuteW,
-            WindowsAndMessaging::{GetWindowThreadProcessId, PostMessageW, SW_SHOWNORMAL},
-        },
-    },
-    w,
+use windows_sys::Win32::{
+    Foundation::HWND,
+    UI::WindowsAndMessaging::{GetWindowThreadProcessId, PostMessageW},
 };
-use zeroize::Zeroizing;
 
 const LABEL: &str = "settings";
 
@@ -66,7 +58,6 @@ struct SettingsSnapshot {
     startup_enabled: bool,
     startup_allowed: bool,
     updates_allowed: bool,
-    repository: Option<String>,
     version: &'static str,
     preview: bool,
 }
@@ -89,10 +80,8 @@ pub fn builder() -> tauri::Builder<Wry> {
         .invoke_handler(tauri::generate_handler![
             settings_state,
             save_settings,
-            configure_updates,
             check_updates,
             install_update,
-            open_token_page,
             close_settings,
         ])
 }
@@ -250,7 +239,6 @@ fn settings_state(
         startup_enabled: !custom && startup::enabled(),
         startup_allowed: !custom,
         updates_allowed,
-        repository: update::configured_repository(),
         version: env!("CARGO_PKG_VERSION"),
         preview,
     })
@@ -310,27 +298,6 @@ fn require_updates(session: &Session) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn configure_updates(
-    window: WebviewWindow,
-    state: State<'_, SettingsRuntime>,
-    token: String,
-) -> Result<(), String> {
-    let token = Zeroizing::new(token);
-    let mut session = session(&window, &state)?;
-    let session = session.as_mut().expect("settings session checked");
-    require_updates(session)?;
-    if state.installing.load(Ordering::Acquire) {
-        return Err("An update is already being installed.".into());
-    }
-    let repository =
-        update::configured_repository().ok_or("GitHub release access is unavailable.")?;
-    update::configure(&repository, Some(token.as_str()))?;
-    session.release = None;
-    session.update_epoch = session.update_epoch.wrapping_add(1);
-    Ok(())
-}
-
-#[tauri::command]
 async fn check_updates(
     window: WebviewWindow,
     state: State<'_, SettingsRuntime>,
@@ -352,7 +319,7 @@ async fn check_updates(
     let mut session = session(&window, &state)?;
     let session = session.as_mut().expect("settings session checked");
     if session.id != id || session.update_epoch != epoch {
-        return Err("Check for updates again after configuring GitHub access.".into());
+        return Err("This update check was superseded. Check for updates again.".into());
     }
     let version = result.as_ref().map(|release| release.version.clone());
     session.release = result;
@@ -387,44 +354,13 @@ async fn install_update(
     .await
     .map_err(|error| error.to_string())
     .and_then(|result| result);
-    if let Ok(mut session) = session(&window, &state)
+    if result.is_err()
+        && let Ok(mut session) = session(&window, &state)
         && let Some(session) = session.as_mut().filter(|session| session.id == id)
     {
-        if result.is_err() {
-            session.release = Some(release);
-        }
+        session.release = Some(release);
     }
     result
-}
-
-#[tauri::command]
-fn open_token_page(window: WebviewWindow, state: State<'_, SettingsRuntime>) -> Result<(), String> {
-    let session = session(&window, &state)?;
-    require_updates(session.as_ref().expect("settings session checked"))?;
-    let repository =
-        update::configured_repository().ok_or("GitHub release access is unavailable.")?;
-    let (account, _) = repository
-        .split_once('/')
-        .ok_or("GitHub release access is unavailable.")?;
-    let url = wide(&format!(
-        "https://github.com/settings/personal-access-tokens/new?name=NetBar%20Updates&target_name={account}&contents=read"
-    ));
-    let hwnd = window.hwnd().map_or(null_mut(), |hwnd| hwnd.0);
-    let outcome = unsafe {
-        ShellExecuteW(
-            hwnd,
-            w!("open"),
-            url.as_ptr(),
-            std::ptr::null(),
-            std::ptr::null(),
-            SW_SHOWNORMAL,
-        )
-    };
-    if outcome as usize > 32 {
-        Ok(())
-    } else {
-        Err("Could not open the GitHub access page in your browser.".into())
-    }
 }
 
 #[tauri::command]

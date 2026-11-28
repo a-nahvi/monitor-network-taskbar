@@ -10,12 +10,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::ptr::{null, null_mut};
 use std::time::Duration;
-use windows_sys::Win32::Foundation::{ERROR_NOT_FOUND, ERROR_SUCCESS};
+use windows_sys::Win32::Foundation::ERROR_SUCCESS;
 use windows_sys::Win32::Networking::WinHttp::*;
-use windows_sys::Win32::Security::Credentials::{
-    CRED_MAX_CREDENTIAL_BLOB_SIZE, CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC, CREDENTIALW,
-    CredDeleteW, CredFree, CredReadW, CredWriteW,
-};
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
 use windows_sys::Win32::System::ApplicationInstallationAndServicing::{
     MSIDBOPEN_READONLY, MSIHANDLE, MsiCloseHandle, MsiDatabaseOpenViewW, MsiOpenDatabaseW,
@@ -24,9 +20,7 @@ use windows_sys::Win32::System::ApplicationInstallationAndServicing::{
 use windows_sys::Win32::System::Com::CoTaskMemFree;
 use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
 use windows_sys::Win32::UI::Shell::{FOLDERID_LocalAppData, SHGetKnownFolderPath};
-use zeroize::{Zeroize, Zeroizing};
 
-const CREDENTIAL_TARGET: &str = "NetBar: GitHub release access";
 const DEFAULT_REPOSITORY: &str = "a-nahvi/monitor-network-taskbar";
 const MSI_UPGRADE_CODE: &str = "{2CC4926F-08F7-4628-9B44-22B9FC00B18C}";
 const MAX_MSI_SIZE: u64 = 64 * 1024 * 1024;
@@ -40,70 +34,19 @@ pub struct AvailableUpdate {
     sha256: [u8; 32],
 }
 
-pub fn configured_repository() -> Option<String> {
-    update_repository().ok().map(str::to_owned)
-}
-
-pub fn configure(repository: &str, token: Option<&str>) -> Result<(), String> {
-    let pinned_repository = update_repository()?;
-    if !repository.trim().eq_ignore_ascii_case(pinned_repository) {
-        return Err("This build uses a fixed GitHub release source.".into());
-    }
-    let Some(token) = token.map(str::trim) else {
-        return Ok(());
-    };
-    if token.len() > CRED_MAX_CREDENTIAL_BLOB_SIZE as usize
-        || !token
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-    {
-        return Err("Enter a valid GitHub access token.".into());
-    }
-    let mut target = wide(CREDENTIAL_TARGET);
-    if token.is_empty() {
-        let result = unsafe { CredDeleteW(target.as_ptr(), CRED_TYPE_GENERIC, 0) };
-        if result == 0 && io::Error::last_os_error().raw_os_error() != Some(ERROR_NOT_FOUND as i32)
-        {
-            return Err(windows_error("Could not remove GitHub access"));
-        }
-        return Ok(());
-    }
-    let mut repository = wide(pinned_repository);
-    let mut blob = Zeroizing::new(token.as_bytes().to_vec());
-    let credential = CREDENTIALW {
-        Type: CRED_TYPE_GENERIC,
-        TargetName: target.as_mut_ptr(),
-        UserName: repository.as_mut_ptr(),
-        CredentialBlobSize: blob.len() as u32,
-        CredentialBlob: blob.as_mut_ptr(),
-        Persist: CRED_PERSIST_LOCAL_MACHINE,
-        ..Default::default()
-    };
-    if unsafe { CredWriteW(&credential, 0) } == 0 {
-        return Err(windows_error("Could not save GitHub access"));
-    }
-    Ok(())
-}
-
 pub fn check() -> Result<Option<AvailableUpdate>, String> {
     let repository = update_repository()?;
-    let token = saved_token(repository)?;
     let client = HttpClient::new()?;
     let request = client.get(
         "api.github.com",
         &format!("/repos/{repository}/releases/latest"),
         "application/vnd.github+json",
-        Some(token.as_str()),
     )?;
     let status = request.status()?;
     if status != 200 {
         return Err(match status {
-            401 | 403 => {
-                "GitHub denied access. Check the token and its repository permissions.".into()
-            }
-            404 => {
-                "GitHub could not find a release. Check the repository and its read access.".into()
-            }
+            403 | 429 => "GitHub temporarily restricted the update check. Try again later.".into(),
+            404 => "No public release is available from the configured GitHub repository.".into(),
             status => format!("GitHub release check returned HTTP {status}."),
         });
     }
@@ -116,13 +59,11 @@ pub fn check() -> Result<Option<AvailableUpdate>, String> {
 
 pub fn install(update: &AvailableUpdate) -> Result<(), String> {
     let repository = update_repository()?;
-    let token = saved_token(repository)?;
     let client = HttpClient::new()?;
     let download = client.get(
         "api.github.com",
         &format!("/repos/{repository}/releases/assets/{}", update.asset_id),
         "application/octet-stream",
-        Some(token.as_str()),
     )?;
     let download = match download.status()? {
         200 => download,
@@ -130,7 +71,7 @@ pub fn install(update: &AvailableUpdate) -> Result<(), String> {
             let location = download.redirect_location()?;
             let (host, path) = asset_location(&location)
                 .ok_or("GitHub redirected the download to an unrecognized address.")?;
-            let request = client.get(host, path, "application/octet-stream", None)?;
+            let request = client.get(host, path, "application/octet-stream")?;
             if request.status()? != 200 {
                 return Err("GitHub's download link expired or is unavailable. Try again.".into());
             }
@@ -304,44 +245,6 @@ fn update_repository() -> Result<&'static str, String> {
     Ok(repository)
 }
 
-fn saved_token(repository: &str) -> Result<Zeroizing<String>, String> {
-    let target = wide(CREDENTIAL_TARGET);
-    let mut raw = null_mut();
-    if unsafe { CredReadW(target.as_ptr(), CRED_TYPE_GENERIC, 0, &mut raw) } == 0 {
-        return if io::Error::last_os_error().raw_os_error() == Some(ERROR_NOT_FOUND as i32) {
-            Ok(Zeroizing::new(String::new()))
-        } else {
-            Err(windows_error("Could not read GitHub access"))
-        };
-    }
-    let credential = unsafe { &*raw };
-    let username = unsafe { copy_wide(credential.UserName) };
-    let matches_repository =
-        username.is_some_and(|username| username.eq_ignore_ascii_case(repository));
-    let mut token = Zeroizing::new(Vec::new());
-    if credential.CredentialBlobSize != 0 {
-        let bytes = unsafe {
-            std::slice::from_raw_parts_mut(
-                credential.CredentialBlob,
-                credential.CredentialBlobSize as usize,
-            )
-        };
-        if matches_repository {
-            token.extend_from_slice(bytes);
-        }
-        bytes.zeroize();
-    }
-    unsafe { CredFree(raw.cast()) };
-    let token = std::str::from_utf8(&token).map_err(|_| "Saved GitHub access token is invalid.")?;
-    if !token
-        .bytes()
-        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-    {
-        return Err("Saved GitHub access token is invalid.".into());
-    }
-    Ok(Zeroizing::new(token.into()))
-}
-
 struct InternetHandle(*mut c_void);
 
 impl InternetHandle {
@@ -394,13 +297,13 @@ impl HttpClient {
         Ok(Self(session))
     }
 
-    fn get<'a>(
-        &'a self,
-        host: &str,
-        path: &str,
-        accept: &str,
-        token: Option<&str>,
-    ) -> Result<Response<'a>, String> {
+    fn get(&self, host: &str, path: &str, accept: &str) -> Result<Response<'_>, String> {
+        let api_version = if host == "api.github.com" {
+            "X-GitHub-Api-Version: 2022-11-28\r\n"
+        } else {
+            ""
+        };
+        let headers = wide(&format!("Accept: {accept}\r\n{api_version}"));
         let host = wide(host);
         let connection = InternetHandle::new(
             unsafe { WinHttpConnect(self.0.0, host.as_ptr(), 443, 0) },
@@ -434,16 +337,6 @@ impl HttpClient {
         {
             return Err(windows_error("Could not secure GitHub redirects"));
         }
-        let mut headers = Zeroizing::new(format!("Accept: {accept}\r\n"));
-        if let Some(token) = token {
-            headers.push_str("X-GitHub-Api-Version: 2022-11-28\r\n");
-            if !token.is_empty() {
-                headers.push_str("Authorization: Bearer ");
-                headers.push_str(token);
-                headers.push_str("\r\n");
-            }
-        }
-        let headers = Zeroizing::new(wide(&headers));
         if unsafe { WinHttpSendRequest(request.0, headers.as_ptr(), u32::MAX, null(), 0, 0, 0) }
             == 0
             || unsafe { WinHttpReceiveResponse(request.0, null_mut()) } == 0
@@ -627,13 +520,6 @@ fn msiexec_path() -> Result<PathBuf, String> {
 
 fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain([0]).collect()
-}
-
-unsafe fn copy_wide(pointer: *const u16) -> Option<String> {
-    if pointer.is_null() {
-        return None;
-    }
-    String::from_utf16(unsafe { wide_slice(pointer) }).ok()
 }
 
 unsafe fn wide_slice<'a>(pointer: *const u16) -> &'a [u16] {

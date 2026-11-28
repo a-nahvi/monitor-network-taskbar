@@ -100,6 +100,8 @@ $testRoot = Join-Path $root ('build\installer-test-' + [Guid]::NewGuid().ToStrin
 $reportDirectory = Join-Path $root 'artifacts'
 $appDirectory = Join-Path $testRoot 'app'
 $app = Join-Path $appDirectory 'NetBar.exe'
+$license = Join-Path $appDirectory 'LICENSE.txt'
+$licenseHash = (Get-FileHash -LiteralPath (Join-Path $root 'LICENSE') -Algorithm SHA256).Hash
 $config = Join-Path $testRoot 'preferences\NetBar.ini'
 New-Item -ItemType Directory -Path $testRoot,(Split-Path -Parent $config),$reportDirectory -Force | Out-Null
 $ownedStartup = $app
@@ -176,6 +178,7 @@ Owner=preserve
     Check ((State $fixtureCode) -eq -1 -and (State $currentCode) -eq 5) 'major upgrade replaces the older product registration'
     Check (@(Get-Process -Name NetBar -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $app }).Count -eq 0) 'upgrade closes the running installed copy gracefully'
     Check ((Get-FileHash -LiteralPath $app).Hash -eq $expectedHash) 'upgrade reuses the original directory and installs the new executable'
+    Check ((Get-FileHash -LiteralPath $license -Algorithm SHA256).Hash -eq $licenseHash) 'upgrade installs the repository license byte-for-byte'
     Check ((Startup-Value) -eq $ownedStartup) 'upgrade preserves the startup choice'
     Check ((Get-FileHash -LiteralPath $config).Hash -eq $preferencesHash) 'upgrade preserves preferences and future fields byte-for-byte'
     $diagnosticPath = Join-Path $testRoot 'upgraded-diagnostics.json'
@@ -190,10 +193,14 @@ Owner=preserve
     Msi-Step 'reject-downgrade' ('/i "' + $fixture + '" INSTALLDIR="' + $appDirectory + '"') 1603
     Check ((State $currentCode) -eq 5 -and (State $fixtureCode) -eq -1) 'an older installer cannot replace the newer installed version'
     $absoluteApp = [IO.Path]::GetFullPath($app)
-    if (!$absoluteApp.StartsWith($testRoot + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Unsafe test deletion path.' }
-    Remove-Item -LiteralPath $absoluteApp -Force
+    $absoluteLicense = [IO.Path]::GetFullPath($license)
+    foreach ($testFile in @($absoluteApp, $absoluteLicense)) {
+        if (!$testFile.StartsWith($testRoot + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Unsafe test deletion path.' }
+    }
+    Remove-Item -LiteralPath $absoluteApp,$absoluteLicense -Force
     Msi-Step 'repair-missing-file' ('/fomus "' + $msi + '"')
     Check ((Get-FileHash -LiteralPath $app).Hash -eq $expectedHash) 'Repair restores a missing executable without depending on that executable'
+    Check ((Get-FileHash -LiteralPath $license -Algorithm SHA256).Hash -eq $licenseHash) 'Repair restores the missing license'
     $location = (Get-ItemProperty -LiteralPath 'HKCU:\Software\NetBar').InstallLocation
     Check ($location.TrimEnd('\') -eq $appDirectory) 'Repair retains the original installation directory'
     $sentinel = Join-Path $appDirectory 'personal-file.txt'
@@ -201,6 +208,7 @@ Owner=preserve
     Msi-Step 'uninstall' ('/x ' + $currentCode)
     Check ((State $currentCode) -eq -1) 'uninstall removes Windows Installer registration'
     Check (!(Test-Path -LiteralPath $app) -and !(Test-Path -LiteralPath $menu)) 'uninstall removes program files and its Start-menu shortcut'
+    Check (!(Test-Path -LiteralPath $license)) 'uninstall removes the owned license'
     $remainingStartup = Startup-Value
     Check ([string]::IsNullOrEmpty($remainingStartup)) 'uninstall removes only its owned startup entry'
     Check ((Test-Path -LiteralPath $sentinel) -and (Get-FileHash -LiteralPath $config).Hash -eq $preferencesHash) 'uninstall preserves preferences and user-created files'
@@ -210,6 +218,7 @@ Owner=preserve
     Remove-Item -LiteralPath $absoluteApp -Force
     Msi-Step 'uninstall-missing-file' ('/x ' + $currentCode)
     Check ((State $currentCode) -eq -1) 'uninstall works when the executable is already missing'
+    Check (!(Test-Path -LiteralPath $license)) 'uninstall removes the owned license even when the executable is missing'
     Check ((Startup-Value) -eq $foreignStartup) 'uninstall preserves a startup entry owned by another copy'
     $succeeded = $true
 } finally {

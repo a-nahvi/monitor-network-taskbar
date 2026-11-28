@@ -79,10 +79,18 @@ try {
                                                    $null, $summary, @(7))
         Check ($platform -eq 'x64;1033') 'MSI platform is Windows x64 with English dialogs'
     } finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($summary) | Out-Null }
-    $files = @(Read-Rows 'SELECT `File`, `FileName`, `FileSize` FROM `File`' @('id','name','bytes'))
-    Check ($files.Count -eq 2 -and @($files | Where-Object { $_.name -in @('NetBar.exe','README.txt') }).Count -eq 2) 'Only the application and README are installed; no test executable'
+    $files = @(Read-Rows 'SELECT `File`, `FileName`, `FileSize`, `Component_` FROM `File`' @('id','name','bytes','component'))
+    Check ($files.Count -eq 3 -and @($files | Where-Object { $_.name -in @('NetBar.exe','README.txt','LICENSE.txt') }).Count -eq 3) 'Only the application, README, and license are installed'
     $appRow = @($files | Where-Object { $_.id -eq 'NetBarExe' })
     Check ($appRow.Count -eq 1 -and [long]$appRow[0].bytes -eq (Get-Item -LiteralPath $executable).Length) 'MSI file metadata matches the executable size'
+    $license = Get-Item -LiteralPath (Join-Path $root 'LICENSE')
+    $licenseRow = @($files | Where-Object { $_.id -eq 'NetBarLicense' })
+    $licenseComponent = @(Read-Rows 'SELECT `ComponentId`, `Directory_`, `Attributes`, `KeyPath` FROM `Component` WHERE `Component` = ''License''' @('guid','directory','attributes','key'))
+    $licenseRegistry = @(Read-Rows 'SELECT `Root`, `Component_` FROM `Registry` WHERE `Registry` = ''LicenseInstalled''' @('root','component'))
+    Check ($licenseRow.Count -eq 1 -and $licenseRow[0].component -eq 'License' -and [long]$licenseRow[0].bytes -eq $license.Length -and
+           $licenseComponent.Count -eq 1 -and $licenseComponent[0].guid -eq '{F648A61E-23B7-4289-BAA5-D3C22DFE9AF4}' -and
+           $licenseComponent[0].directory -eq 'INSTALLDIR' -and [int]$licenseComponent[0].attributes -eq 260 -and $licenseComponent[0].key -eq 'LicenseInstalled' -and
+           $licenseRegistry.Count -eq 1 -and [int]$licenseRegistry[0].root -eq 1 -and $licenseRegistry[0].component -eq 'License') 'MSI gives the license a stable per-user component and key path'
     $controls = @(Read-Rows 'SELECT `Text` FROM `Control`' @('text'))
     Check ($controls.Count -ge 30 -and !($controls | Where-Object { $_.text -match '[\u0600-\u06ff]' })) 'Authored installer controls remain in English'
     $conditions = @(Read-Rows 'SELECT `Condition` FROM `LaunchCondition`' @('condition'))
@@ -91,17 +99,19 @@ try {
     Extract-Stream '_Streams' 'netbar.cab' $cabinet
     & (Join-Path $env:WINDIR 'System32\expand.exe') '-F:*' $cabinet $payload | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Embedded MSI cabinet could not be extracted.' }
-    Check (@(Get-ChildItem -LiteralPath $payload -File).Count -eq 2) 'Embedded cabinet contains exactly two application payload files'
+    Check (@(Get-ChildItem -LiteralPath $payload -File).Count -eq 3) 'Embedded cabinet contains exactly three application payload files'
     $hash = (Get-FileHash -LiteralPath $executable).Hash
     Check ((Get-FileHash -LiteralPath (Join-Path $payload 'NetBarExe')).Hash -eq $hash) 'Actual embedded executable matches the release by SHA-256'
     $embeddedReadme = [IO.File]::ReadAllText((Join-Path $payload 'NetBarReadme')).Replace("`r`n", "`n")
     $sourceReadme = [IO.File]::ReadAllText((Join-Path $root 'README.md')).Replace("`r`n", "`n")
     Check ($embeddedReadme -eq $sourceReadme) 'Actual embedded README matches the current English documentation'
+    $licenseHash = (Get-FileHash -LiteralPath $license.FullName -Algorithm SHA256).Hash
+    Check ((Get-FileHash -LiteralPath (Join-Path $payload 'NetBarLicense') -Algorithm SHA256).Hash -eq $licenseHash) 'Actual embedded license matches the repository license by SHA-256'
     $action = Join-Path $stage 'NetBar.InstallerActions.dll'
     Extract-Stream 'Binary' 'NetBarActions' $action
     Check ((Get-FileHash -LiteralPath $action).Hash -eq (Get-FileHash -LiteralPath $ActionsDllPath).Hash) 'Embedded installer actions match the built DLL by SHA-256'
     [ordered]@{ version = $version; installer = $msi; bytes = (Get-Item -LiteralPath $msi).Length;
-        executable_sha256 = $hash; product_code = $properties.ProductCode;
+        executable_sha256 = $hash; license_sha256 = $licenseHash; product_code = $properties.ProductCode;
         checks = $checks.ToArray(); note = 'Read-only metadata and actual embedded-payload verification; does not install or run extracted files.' } |
         ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $reportDirectory ('package-verification-' + $version + '.json')) -Encoding utf8
 } finally {

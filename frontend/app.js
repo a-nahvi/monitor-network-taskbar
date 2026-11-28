@@ -123,10 +123,6 @@ function updateControls() {
 form.addEventListener("input", (event) => {
   if (!state) return;
   const input = event.target;
-  if (input.id === "token") {
-    updateReleaseControls();
-    return;
-  }
   const { display, network, colors } = controls;
   Object.assign(settings, {
     graph: display.graph.value === "graph",
@@ -217,10 +213,6 @@ function updateReleaseControls() {
   byId("install-update").hidden = !availableVersion;
   byId("install-update").disabled = !allowed || updateBusy || settingsBusy || hasChanges();
   byId("install-update").title = hasChanges() ? "Save changes before installing the update" : "";
-  byId("save-token").disabled = !allowed || updateBusy || !byId("token").value.trim();
-  byId("clear-token").disabled = !allowed || updateBusy;
-  byId("token").disabled = !allowed || updateBusy;
-  byId("open-token-page").disabled = !allowed || updateBusy;
 }
 
 async function runUpdateAction(message, callback) {
@@ -239,7 +231,7 @@ async function runUpdateAction(message, callback) {
 }
 
 byId("check-updates").addEventListener("click", () => {
-  runUpdateAction("Checking GitHub…", async () => {
+  runUpdateAction("Checking for updates…", async () => {
     availableVersion = null;
     const release = await invoke("check_updates");
     availableVersion = release.version;
@@ -258,34 +250,6 @@ byId("install-update").addEventListener("click", () => {
     availableVersion = null;
     setStatus("update-status", "The verified installer has started.", "success");
   });
-});
-
-async function saveToken(clear = false) {
-  const input = byId("token");
-  const token = clear ? "" : input.value.trim();
-  if (!clear && !token) return;
-  input.value = "";
-  await runUpdateAction(clear ? "Clearing GitHub access…" : "Saving GitHub access…", async () => {
-    await invoke("configure_updates", { token });
-    availableVersion = null;
-    setStatus("update-status", clear ? "GitHub token cleared." : "GitHub access saved.", "success");
-  });
-}
-
-byId("save-token").addEventListener("click", () => saveToken());
-byId("clear-token").addEventListener("click", () => saveToken(true));
-byId("open-token-page").addEventListener("click", async () => {
-  try {
-    await invoke("open_token_page");
-  } catch (error) {
-    setStatus("update-status", errorMessage(error, "Could not open the GitHub token page."), "error");
-  }
-});
-byId("token").addEventListener("keydown", (event) => {
-  if (event.key === "Enter") {
-    event.preventDefault();
-    if (!byId("save-token").disabled) saveToken();
-  }
 });
 
 function renderRate(valueId, bytes, showBits) {
@@ -402,7 +366,7 @@ async function initialize() {
   try {
     state = invoke ? await invoke("settings_state") : {
       settings: defaultSettings, defaults: defaultSettings, adapters: [], startupEnabled: false,
-      startupAllowed: false, updatesAllowed: false, repository: null, version: "2.2.0", preview: true,
+      startupAllowed: false, updatesAllowed: false, version: "2.2.1", preview: true,
     };
     settings = { ...state.settings };
     savedSettings = { ...settings };
@@ -411,7 +375,6 @@ async function initialize() {
     controls.startup.disabled = !state.startupAllowed;
     byId("sidebar-version").textContent = `Version ${state.version}`;
     byId("installed-version").textContent = `NetBar ${state.version}`;
-    byId("repository").value = state.repository ?? "";
     setStatus("update-status", state.updatesAllowed ? "" : "Updates are available when NetBar is installed with its MSI.");
     setAdapterChoices();
     writeControls();

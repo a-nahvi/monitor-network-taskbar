@@ -39,6 +39,8 @@ $msiPath = Join-Path $stage ('NetBar-' + $PackageVersion + '-Setup-x64.msi')
 Copy-Item -LiteralPath $executable.FullName -Destination (Join-Path $stage 'NetBarExe')
 $readme = [IO.File]::ReadAllText((Join-Path $root 'README.md')).Replace("`r`n", "`n").Replace("`n", "`r`n")
 [IO.File]::WriteAllText((Join-Path $stage 'NetBarReadme'), $readme, [Text.UTF8Encoding]::new($true))
+$license = Get-Item -LiteralPath (Join-Path $root 'LICENSE')
+Copy-Item -LiteralPath $license.FullName -Destination (Join-Path $stage 'NetBarLicense')
 $ddf = @'
 .OPTION EXPLICIT
 .Set Cabinet=on
@@ -50,6 +52,7 @@ $ddf = @'
 .Set MaxDiskSize=0
 "NetBarExe" "NetBarExe"
 "NetBarReadme" "NetBarReadme"
+"NetBarLicense" "NetBarLicense"
 '@
 [IO.File]::WriteAllText((Join-Path $stage 'payload.ddf'), $ddf, [Text.Encoding]::ASCII)
 Push-Location $stage
@@ -151,18 +154,22 @@ try {
     Row Directory @('NetBarMenu', 'ProgramMenuFolder', 'NetBar')
     Row Component @('Application', '{7D8CB6D5-A2BC-47E4-8C2E-51A0E40B8D36}', 'INSTALLDIR', 256, $null, 'NetBarExe')
     Row Component @('StartMenu', '{E5C6349D-2871-424D-9623-4C90EA22D59E}', 'NetBarMenu', 260, $null, 'MenuInstalled')
+    Row Component @('License', '{F648A61E-23B7-4289-BAA5-D3C22DFE9AF4}', 'INSTALLDIR', 260, $null, 'LicenseInstalled')
     Row Feature @('NetBar', $null, 'NetBar', 'Taskbar upload and download speeds.', 1, 1, 'INSTALLDIR', 0)
     Row FeatureComponents @('NetBar', 'Application')
     Row FeatureComponents @('NetBar', 'StartMenu')
+    Row FeatureComponents @('NetBar', 'License')
     Row File @('NetBarExe', 'Application', 'NetBar.exe', [int]$executable.Length, $executable.VersionInfo.FileVersion, '1033', 512, 1)
     Row File @('NetBarReadme', 'Application', 'README.txt', [int](Get-Item -LiteralPath (Join-Path $stage 'NetBarReadme')).Length, $null, $null, 512, 2)
-    Row Media @(1, 2, $null, '#netbar.cab', $null, $null)
+    Row File @('NetBarLicense', 'License', 'LICENSE.txt', [int]$license.Length, $null, $null, 512, 3)
+    Row Media @(1, 3, $null, '#netbar.cab', $null, $null)
     Stream-Row '_Streams' 'netbar.cab' (Join-Path $stage 'netbar.cab')
     Stream-Row 'Icon' 'NetBar.ico' (Join-Path $root 'resources\app.ico')
     Stream-Row 'Binary' 'NetBarActions' $actionsDll
     Row Registry @('InstallLocation', 1, 'Software\NetBar', 'InstallLocation', '[INSTALLDIR]', 'Application')
     Row Registry @('InstallVersion', 1, 'Software\NetBar', 'Version', $PackageVersion, 'Application')
     Row Registry @('MenuInstalled', 1, 'Software\NetBar', 'MenuInstalled', '#1', 'StartMenu')
+    Row Registry @('LicenseInstalled', 1, 'Software\NetBar', 'LicenseInstalled', '#1', 'License')
     Row Shortcut @('NetBarShortcut', 'NetBarMenu', 'NetBar', 'StartMenu', '[#NetBarExe]', $null,
                    'Show upload and download speeds beside the clock.', $null, $null, $null, 1, 'INSTALLDIR')
     Row RemoveFile @('RemoveMenuFolder', 'StartMenu', $null, 'NetBarMenu', 2)

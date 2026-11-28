@@ -19,10 +19,8 @@
           "permissions": [
             "allow-settings-state",
             "allow-save-settings",
-            "allow-configure-updates",
             "allow-check-updates",
             "allow-install-update",
-            "allow-open-token-page",
             "allow-close-settings"
           ]
         }

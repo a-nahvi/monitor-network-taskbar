@@ -37,10 +37,6 @@
     <symbol id="icon-check" viewBox="0 0 24 24">
       <path d="m5.5 12 4.5 4.5 8.5-9"/>
     </symbol>
-    <symbol id="icon-shield" viewBox="0 0 24 24">
-      <path d="M12 3 5 6v6c0 3.7 3.2 6.6 7 9 3.8-2.4 7-5.3 7-9V6z"/>
-      <path d="m9 12 2 2 4-4"/>
-    </symbol>
   </svg>
 
   <div class="settings-shell">
@@ -174,7 +170,7 @@
           <section id="panel-updates" class="panel" role="tabpanel" aria-labelledby="tab-updates" hidden>
             <header class="page-header">
               <h1>Updates</h1>
-              <p>Install verified Windows releases from your private GitHub repository.</p>
+              <p>Check for and install verified Windows releases from GitHub.</p>
             </header>
 
             <div class="release-card">
@@ -184,26 +180,6 @@
               <button class="button primary" type="button" id="install-update" hidden>Install update</button>
             </div>
             <p id="update-status" class="inline-status" role="status"></p>
-
-            <div class="access-header">
-              <svg class="icon" aria-hidden="true"><use href="#icon-shield"></use></svg>
-              <div><h2>GitHub access</h2><p>Use a fine-grained token with read-only Contents access to this repository.</p></div>
-            </div>
-            <div class="rows">
-              <div class="setting-row access-row">
-                <label class="field-label" for="repository">Repository</label>
-                <input id="repository" type="text" readonly spellcheck="false">
-              </div>
-              <div class="setting-row access-row">
-                <label class="field-label" for="token">Read-only token</label>
-                <input id="token" type="password" placeholder="Enter GitHub token" maxlength="1024" autocomplete="off" autocapitalize="off" spellcheck="false">
-              </div>
-            </div>
-            <div class="access-actions">
-              <button class="text-button" type="button" id="open-token-page">Create a token</button>
-              <button class="text-button" type="button" id="clear-token">Clear token</button>
-              <button class="button secondary" type="button" id="save-token">Save access</button>
-            </div>
           </section>
         </div>
 

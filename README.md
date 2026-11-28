@@ -1,38 +1,56 @@
 # NetBar
 
-NetBar is a Windows 11 x64 taskbar monitor for upload and download activity. Tauri manages the taskbar window, tray menu, and Settings. NetBar draws the taskbar widget to a cached native Windows bitmap and reads adapter counters through Windows IP Helper.
+[![Windows CI](https://github.com/a-nahvi/monitor-network-taskbar/actions/workflows/ci.yml/badge.svg)](https://github.com/a-nahvi/monitor-network-taskbar/actions/workflows/ci.yml)
 
-## Install and upgrade
+Live upload and download rates next to the system tray on Windows 11 x64. Use compact numbers or a 60-second graph. NetBar is built with Rust and Tauri and draws the taskbar widget to a cached Windows bitmap.
 
-Open the MSI from the private repository’s Releases page. The installer closes a running per-user NetBar MSI installation and upgrades it in place. It preserves preferences and the Windows Startup shortcut, and can launch the new version on completion. Install and uninstall require no administrator rights. Preferences are kept in `%LocalAppData%\NetBar\NetBar.ini`.
+**[Download the latest Windows installer](https://github.com/a-nahvi/monitor-network-taskbar/releases/latest)** · [Report an issue](https://github.com/a-nahvi/monitor-network-taskbar/issues)
 
-NetBar loads the Microsoft Edge WebView2 Runtime when you open Settings. Windows 11 includes this runtime. If it was removed, install the Evergreen Runtime before opening Settings. [Microsoft Edge WebView2](https://developer.microsoft.com/microsoft-edge/webview2/)
+![NetBar Display settings in dark mode, with upload and download readings in the taskbar preview](resources/screenshots/settings.png)
 
-Portable copies can be run directly. To switch from a portable copy to an MSI installation, exit that copy first. If its settings live in an adjacent `NetBar.ini`, copy that file to `%LocalAppData%\NetBar\` before installing if the destination does not already exist.
+## Install and update
+
+1. Download `NetBar-<version>-Setup-x64.msi` from the latest GitHub release and run it.
+2. After installation, open **Settings → Updates → Check for updates**. If an update is available, select **Install update**.
+
+Downloads and update checks use anonymous access to GitHub. If an older build reports a GitHub sign-in error, upgrade using the latest MSI. The per-user installer upgrades an existing MSI installation in place and preserves preferences and the Startup shortcut. Preferences are stored in `%LocalAppData%\NetBar\NetBar.ini`. To uninstall, open **Windows Settings → Apps → Installed apps**.
+
+NetBar checks the download size, SHA-256 digest, and MSI identity before opening Windows Installer. For a manual download, compare the output below with `NetBar-<version>-SHA256.txt`, included with releases from 2.2.1 onward.
+
+```powershell
+Get-FileHash -Algorithm SHA256 -Path .\NetBar-*-Setup-x64.msi
+```
 
 ## Use NetBar
 
-Right-click the widget to pause or resume readings. Double-click it or select **Settings** from the tray menu to open Settings. **Display** controls the widget, colors, position, and startup. **Network** controls the adapter, units, and refresh interval. Manual adapter selection remains selected when the adapter is disconnected. Automatic selection prefers an active physical adapter and avoids counting VPN and physical traffic together.
+- **Right-click** the widget to pause or resume readings. Upload is the top row and download is the bottom row.
+- **Double-click** the widget or select **Settings** from the tray menu. Use **Display** for the layout, colors, position, and startup. Unlock the widget to drag it along the taskbar.
+- Use **Network** to select an adapter, change the refresh interval, or switch between bytes and bits per second. Automatic selection prefers an active physical adapter to avoid double-counting VPN traffic.
 
-Feather icons mark upload on the top row and download on the bottom row. The optional graph covers the last minute with a shared scale. Unlock the position to drag the widget. The widget is anchored near the tray on the primary horizontal taskbar and hides for fullscreen applications or while the taskbar is out of view. [Feather Icons](https://feathericons.com/)
+The widget runs on the primary horizontal taskbar. It hides over fullscreen applications and when the taskbar moves out of view. Opening Settings loads the Microsoft Edge WebView2 Runtime included with Windows 11. [Microsoft Edge WebView2](https://developer.microsoft.com/microsoft-edge/webview2/)
 
-## Updates
+## Performance
 
-1. Create a fine-grained GitHub token with **Only select repositories** set to `monitor-network-taskbar` and repository **Contents** set to **Read-only**. [Create a GitHub token](https://github.com/settings/personal-access-tokens/new?name=NetBar%20Updates&target_name=a-nahvi&contents=read)
-2. Open **Settings → Updates**. Paste the token and choose **Save access**. NetBar stores the token in Windows Credential Manager for your Windows account.
-3. Choose **Check for updates**. When a newer version is available, choose **Install update**. NetBar verifies the release asset and opens Windows Installer. Choose **Finish** to launch the new version when prompted.
+The table shows a 45-second run per version on one Windows 11 x64 machine after a 12-second warm-up. The numerical widget was visible with one-second updates and Settings was closed. Measurements include the NetBar process and its descendants.
 
-If the token expires, save its replacement in the same tab. **Clear token** removes the saved access. The app contacts GitHub only when you check for or install an update. Downloads are restricted to the repository configured at build time.
+| Version | Median private memory | Average CPU (one logical core) | WebView2 processes |
+| --- | ---: | ---: | ---: |
+| 2.1.1 | 150.7 MiB | 0.94% | 6 |
+| 2.2.0 | 2.9 MiB | 0.17% | 0 |
 
-## Build
+## Build from source
 
-Use Rust 1.90 or later on Windows with the `x86_64-pc-windows-msvc` target, Visual Studio C++ Build Tools, and a Windows SDK. Use PowerShell 7 to produce the MSI. The HTML, CSS, and JavaScript in `frontend` are bundled directly by Cargo and Tauri.
+On Windows, install Rust 1.90 or later with the `x86_64-pc-windows-msvc` target, Visual Studio C++ Build Tools, a Windows SDK, and PowerShell 7. Run these commands from the repository root.
 
 ```powershell
 cargo test --locked
 pwsh -File .\scripts\release.ps1
 ```
 
-The MSI and its SHA-256 checksum are written to `dist`. Git tags matching the package version trigger the private repository’s release workflow. The workflow sets `NETBAR_UPDATE_REPO` to the repository that publishes the MSI.
+The build writes the MSI and SHA-256 checksum to `dist`. To preview Settings in isolation, run `NetBar.exe --inspect-ui --config <path>`. The release workflow verifies the installer and tests an upgrade from version 1.3.0.
 
-To isolate settings during local verification, launch the executable with `--config <path>`. Use `--inspect-ui --config <path>` to preview settings alongside an installed copy or `--diagnose <path>` to write a JSON diagnostic and exit. The installer fixture script checks an upgrade from the original 1.3.0 MSI in a clean test account.
+[Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) · [Security reporting](SECURITY.md)
+
+## License
+
+NetBar is released under the [MIT License](LICENSE). The arrows are from [Feather Icons](https://feathericons.com/) and their [license notice](frontend/licenses/feather.txt) is included.
