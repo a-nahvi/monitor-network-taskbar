@@ -310,6 +310,14 @@ byId("install-update").addEventListener("click", () => {
   });
 });
 
+byId("open-releases").addEventListener("click", async () => {
+  try {
+    await invoke("open_releases");
+  } catch (error) {
+    setError("update-status", "openReleasesFailed", error);
+  }
+});
+
 function renderRate(valueId, bytes, showBits) {
   const base = showBits ? 1000 : 1024;
   const units = showBits ? ["b/s", "Kb/s", "Mb/s", "Gb/s"] : ["B/s", "KB/s", "MB/s", "GB/s"];
@@ -424,7 +432,7 @@ async function initialize() {
   try {
     state = invoke ? await invoke("settings_state") : {
       settings: defaultSettings, defaults: defaultSettings, adapters: [], startupEnabled: false,
-      startupAllowed: false, updatesAllowed: false, version: "2.3.1", preview: true,
+      startupAllowed: false, updatesAllowed: false, version: "2.4.0", preview: true,
     };
     settings = { ...state.settings, language: state.settings.language === "persian" ? "persian" : "english" };
     savedSettings = { ...settings };
@@ -432,6 +440,7 @@ async function initialize() {
     controls.startup.checked = savedStartup;
     controls.startup.disabled = !state.startupAllowed;
     byId("installed-version-value").textContent = `NetBar ${state.version}`;
+    byId("open-releases").hidden = !invoke;
     writeControls();
     setStatus("update-status", state.updatesAllowed ? "" : "updatesUnavailable");
     workspace.inert = false;

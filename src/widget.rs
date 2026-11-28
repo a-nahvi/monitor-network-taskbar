@@ -1,4 +1,4 @@
-use crate::widget_window::WidgetWindow;
+use crate::widget_window::{Controls, WidgetWindow};
 use std::ffi::c_void;
 use std::ptr::{NonNull, null, null_mut};
 use std::time::{Duration, Instant};
@@ -37,7 +37,7 @@ pub struct Presentation<'a> {
     pub upload_color: Option<Color>,
     pub download_color: Option<Color>,
     pub connected: bool,
-    pub locked: bool,
+    pub controls: Controls,
     pub history: &'a [(f64, f64)],
 }
 
@@ -101,7 +101,7 @@ pub struct Widget {
     taskbar: Taskbar,
     surface: Option<Surface>,
     position: Option<(i32, i32)>,
-    draggable: bool,
+    controls: Controls,
     dirty: bool,
 }
 
@@ -118,7 +118,7 @@ impl Widget {
             taskbar: Taskbar::default(),
             surface: None,
             position: None,
-            draggable: false,
+            controls: Controls::default(),
             dirty: true,
         }
     }
@@ -153,11 +153,10 @@ impl Widget {
                 || old.connected != appearance.connected
         });
 
-        let draggable = !presentation.locked;
-        if self.draggable != draggable {
-            self.draggable = draggable;
+        if self.controls != presentation.controls {
+            self.controls = presentation.controls;
             if let Some(window) = &self.window {
-                window.set_draggable(draggable);
+                window.set_controls(self.controls);
             }
         }
 
@@ -229,9 +228,8 @@ impl Widget {
                 .next_window_attempt
                 .is_none_or(|time| Instant::now() >= time)
         {
-            match WidgetWindow::new(&self.app, self.control, self.taskbar.window) {
+            match WidgetWindow::new(&self.app, self.control, self.taskbar.window, self.controls) {
                 Ok(window) => {
-                    window.set_draggable(self.draggable);
                     self.window = Some(window);
                     self.dirty = true;
                 }

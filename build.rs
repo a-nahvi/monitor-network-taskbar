@@ -3,6 +3,7 @@ const COMMANDS: &[&str] = &[
     "save_settings",
     "check_updates",
     "install_update",
+    "open_releases",
     "close_settings",
 ];
 

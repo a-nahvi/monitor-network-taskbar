@@ -21,11 +21,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use tauri::{
-    AppHandle, RunEvent, Wry,
-    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
-    tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
-};
+use tauri::{AppHandle, RunEvent};
 use widget::{Presentation, Widget};
 use windows_sys::{
     Win32::{
@@ -37,11 +33,9 @@ use windows_sys::{
 };
 
 pub const NETWORK_CHANGED: u32 = WM_APP + 1;
-pub const SETTINGS_OPENED: u32 = WM_APP + 2;
 pub const SETTINGS_CLOSED: u32 = WM_APP + 3;
 pub const SETTINGS_RELOAD: u32 = WM_APP + 4;
 const POSITION_CHANGED: u32 = WM_APP + 5;
-const MENU_ACTION: u32 = WM_APP + 6;
 const OPEN_SETTINGS: u32 = WM_APP + 7;
 const SAMPLE_TIMER: usize = 1;
 const PLACEMENT_TIMER: usize = 2;
@@ -121,7 +115,7 @@ fn run() -> io::Result<()> {
             io::Error::other("The settings preview requires a separate --config path.")
         })?;
         settings_window::builder()
-            .setup(move |app| Ok(settings_window::open(app.handle(), path, 0, true)?))
+            .setup(move |app| Ok(settings_window::open(app.handle(), path, 0, true).map(|_| ())?))
             .run(settings_window::context())
             .map_err(io::Error::other)?;
         return Ok(());
@@ -145,9 +139,7 @@ fn run() -> io::Result<()> {
     }
     if already_running {
         if options.settings {
-            unsafe {
-                PostMessageW(FindWindowW(WINDOW_CLASS, WINDOW_TITLE), OPEN_SETTINGS, 0, 0);
-            }
+            return request_existing_settings();
         }
         return Ok(());
     }
@@ -229,13 +221,7 @@ fn run_monitor(
         if hwnd.is_null() {
             return Err(io::Error::last_os_error());
         }
-        let state = match App::new(tauri, hwnd, settings, path, custom) {
-            Ok(state) => Box::new(RefCell::new(state)),
-            Err(error) => {
-                DestroyWindow(hwnd);
-                return Err(error);
-            }
-        };
+        let state = Box::new(RefCell::new(App::new(tauri, hwnd, settings, path, custom)));
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, (&raw const *state) as isize);
         HOOK_TARGET.set(hwnd);
         let foreground = SetWinEventHook(
@@ -250,10 +236,11 @@ fn run_monitor(
         let notifications = network::Notifications::new(hwnd);
         {
             let app = &mut *state.borrow_mut();
-            app.refresh_network();
+            if app.is_sampling() {
+                app.refresh_network();
+            }
             app.arm_sample();
             app.refresh_widget(true);
-            app.tray.ensure_icon(&app.ui, hwnd);
             timer(hwnd, PLACEMENT_TIMER, 2000, 150);
             if open_settings {
                 app.open_settings();
@@ -281,6 +268,29 @@ fn run_monitor(
         }
     }
     Ok(())
+}
+
+fn request_existing_settings() -> io::Result<()> {
+    // The single-instance mutex can be visible before the first launch has a message window.
+    for _ in 0..40 {
+        unsafe {
+            let hwnd = FindWindowW(WINDOW_CLASS, WINDOW_TITLE);
+            if !hwnd.is_null() {
+                let mut process = 0;
+                GetWindowThreadProcessId(hwnd, &mut process);
+                if process != 0 {
+                    AllowSetForegroundWindow(process);
+                    if PostMessageW(hwnd, OPEN_SETTINGS, 0, 0) != 0 {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    Err(io::Error::other(
+        "Could not reach the running NetBar window.",
+    ))
 }
 
 fn quit_existing() -> io::Result<()> {
@@ -317,162 +327,6 @@ fn diagnostics(config: &Path, report: &Path) -> io::Result<()> {
     std::fs::write(report, serde_json::to_vec_pretty(&data)?)
 }
 
-struct Tray {
-    icon: Option<TrayIcon<Wry>>,
-    menu: Menu<Wry>,
-    preferences: MenuItem<Wry>,
-    visible: CheckMenuItem<Wry>,
-    locked: CheckMenuItem<Wry>,
-    paused: CheckMenuItem<Wry>,
-    reset: MenuItem<Wry>,
-    quit: MenuItem<Wry>,
-}
-
-const ACTION_SHOW: usize = 1;
-const ACTION_LOCK: usize = 2;
-const ACTION_RESET: usize = 3;
-const ACTION_TOGGLE_PAUSE: usize = 4;
-
-struct TrayLabels {
-    preferences: &'static str,
-    visible: &'static str,
-    locked: &'static str,
-    paused: &'static str,
-    reset: &'static str,
-    quit: &'static str,
-}
-
-impl TrayLabels {
-    fn for_language(language: Language) -> Self {
-        Self {
-            preferences: language.text("Settings…", "تنظیمات…"),
-            visible: language.text("Show on taskbar", "نمایش در نوار وظیفه"),
-            locked: language.text("Lock position", "قفل کردن موقعیت"),
-            paused: language.text("Pause readings", "توقف نمایش سرعت"),
-            reset: language.text("Reset position", "بازنشانی موقعیت"),
-            quit: language.text("Exit NetBar", "خروج از نت‌بار"),
-        }
-    }
-}
-
-impl Tray {
-    fn new(app: &AppHandle, control: HWND, settings: &Settings) -> tauri::Result<Self> {
-        let labels = TrayLabels::for_language(settings.language);
-        let preferences =
-            MenuItem::with_id(app, "settings", labels.preferences, true, None::<&str>)?;
-        let visible = CheckMenuItem::with_id(
-            app,
-            "visible",
-            labels.visible,
-            true,
-            settings.visible,
-            None::<&str>,
-        )?;
-        let locked = CheckMenuItem::with_id(
-            app,
-            "locked",
-            labels.locked,
-            true,
-            settings.locked,
-            None::<&str>,
-        )?;
-        let reset = MenuItem::with_id(
-            app,
-            "reset",
-            labels.reset,
-            settings.offset != 0,
-            None::<&str>,
-        )?;
-        let paused =
-            CheckMenuItem::with_id(app, "paused", labels.paused, true, false, None::<&str>)?;
-        let quit = MenuItem::with_id(app, "quit", labels.quit, true, None::<&str>)?;
-        let menu = Menu::with_items(
-            app,
-            &[
-                &preferences,
-                &PredefinedMenuItem::separator(app)?,
-                &visible,
-                &locked,
-                &reset,
-                &paused,
-                &PredefinedMenuItem::separator(app)?,
-                &quit,
-            ],
-        )?;
-        let destination = control as usize;
-        app.on_menu_event(move |_, event| {
-            let (message, action) = match event.id().as_ref() {
-                "settings" => (OPEN_SETTINGS, 0),
-                "visible" => (MENU_ACTION, ACTION_SHOW),
-                "locked" => (MENU_ACTION, ACTION_LOCK),
-                "reset" => (MENU_ACTION, ACTION_RESET),
-                "paused" => (MENU_ACTION, ACTION_TOGGLE_PAUSE),
-                "quit" => (WM_CLOSE, 0),
-                _ => return,
-            };
-            unsafe {
-                PostMessageW(destination as HWND, message, action, 0);
-            }
-        });
-        Ok(Self {
-            icon: None,
-            menu,
-            preferences,
-            visible,
-            locked,
-            paused,
-            reset,
-            quit,
-        })
-    }
-
-    fn ensure_icon(&mut self, app: &AppHandle, control: HWND) {
-        if self.icon.is_some() {
-            return;
-        }
-        let destination = control as usize;
-        let mut builder = TrayIconBuilder::with_id("netbar")
-            .menu(&self.menu)
-            .show_menu_on_left_click(false)
-            .on_tray_icon_event(move |_, event| {
-                if let TrayIconEvent::Click {
-                    button: MouseButton::Left,
-                    button_state: MouseButtonState::Up,
-                    ..
-                } = event
-                {
-                    unsafe {
-                        PostMessageW(destination as HWND, OPEN_SETTINGS, 0, 0);
-                    }
-                }
-            });
-        if let Some(icon) = app.default_window_icon() {
-            builder = builder.icon(icon.clone());
-        }
-        self.icon = builder.build(app).ok();
-    }
-
-    fn sync(&self, settings: &Settings, settings_open: bool) {
-        let _ = self.visible.set_checked(settings.visible);
-        let _ = self.locked.set_checked(settings.locked);
-        let _ = self.visible.set_enabled(!settings_open);
-        let _ = self.locked.set_enabled(!settings_open);
-        let _ = self
-            .reset
-            .set_enabled(settings.offset != 0 && !settings_open);
-    }
-
-    fn set_language(&self, language: Language) {
-        let labels = TrayLabels::for_language(language);
-        let _ = self.preferences.set_text(labels.preferences);
-        let _ = self.visible.set_text(labels.visible);
-        let _ = self.locked.set_text(labels.locked);
-        let _ = self.paused.set_text(labels.paused);
-        let _ = self.reset.set_text(labels.reset);
-        let _ = self.quit.set_text(labels.quit);
-    }
-}
-
 struct Drag {
     origin: i32,
     offset: i32,
@@ -485,8 +339,7 @@ struct App {
     path: PathBuf,
     custom: bool,
     taskbar_created: u32,
-    settings_open: bool,
-    tray: Tray,
+    settings_window: Option<usize>,
     light_text: bool,
     widget: Widget,
     network: Monitor,
@@ -499,25 +352,17 @@ struct App {
 }
 
 impl App {
-    fn new(
-        ui: AppHandle,
-        hwnd: HWND,
-        settings: Settings,
-        path: PathBuf,
-        custom: bool,
-    ) -> io::Result<Self> {
+    fn new(ui: AppHandle, hwnd: HWND, settings: Settings, path: PathBuf, custom: bool) -> Self {
         let light_text = preferences::light_text(settings.theme);
-        let tray = Tray::new(&ui, hwnd, &settings).map_err(io::Error::other)?;
         let widget = Widget::new(ui.clone(), hwnd);
-        Ok(Self {
+        Self {
             ui,
             hwnd,
             settings,
             path,
             custom,
             taskbar_created: unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) },
-            settings_open: false,
-            tray,
+            settings_window: None,
             light_text,
             widget,
             network: Monitor::default(),
@@ -527,7 +372,7 @@ impl App {
             dragging: None,
             paused: false,
             suspended: false,
-        })
+        }
     }
 
     fn select_network(&mut self) -> bool {
@@ -591,7 +436,13 @@ impl App {
                 light_text: self.light_text,
                 horizontal_offset: s.offset,
                 sample_interval_ms: s.interval,
-                locked: s.locked || self.settings_open,
+                controls: widget_window::Controls {
+                    language: s.language,
+                    paused: self.paused,
+                    unlocked: !s.locked,
+                    settings_open: self.settings_window.is_some(),
+                    can_reset: s.offset != 0,
+                },
                 upload: if self.rates.connected {
                     up.as_str()
                 } else {
@@ -611,13 +462,8 @@ impl App {
         );
     }
 
-    fn refresh_placement(&mut self) {
-        self.widget.refresh_placement();
-        self.tray.ensure_icon(&self.ui, self.hwnd);
-    }
-
     fn is_sampling(&self) -> bool {
-        !self.paused && !self.suspended
+        self.settings.visible && !self.paused && !self.suspended
     }
 
     fn arm_sample(&self) {
@@ -640,32 +486,32 @@ impl App {
         self.network.sample();
     }
 
-    fn toggle_pause(&mut self) {
-        self.paused = !self.paused;
-        let _ = self.tray.paused.set_checked(self.paused);
+    fn set_paused(&mut self, paused: bool) {
+        if self.paused == paused {
+            return;
+        }
+        self.paused = paused;
         if self.is_sampling() {
             self.prime_network();
         }
         self.arm_sample();
+        self.refresh_widget(false);
     }
 
     fn open_settings(&mut self) {
-        if let Err(error) =
-            settings_window::open(&self.ui, self.path.clone(), self.hwnd as usize, self.custom)
-        {
-            let language = self.settings.language;
-            let message =
-                language.text("NetBar settings could not open.", "تنظیمات نت‌بار باز نشد.");
-            show_error(&format!("{message}\n{error}"), language);
-            return;
+        self.finish_drag(false);
+        match settings_window::open(&self.ui, self.path.clone(), self.hwnd as usize, self.custom) {
+            Ok(window) => {
+                self.settings_window = Some(window);
+                self.refresh_widget(false);
+            }
+            Err(error) => {
+                let language = self.settings.language;
+                let message =
+                    language.text("NetBar settings could not open.", "تنظیمات نت‌بار باز نشد.");
+                show_error(&format!("{message}\n{error}"), language);
+            }
         }
-        self.set_settings_open(true);
-    }
-
-    fn set_settings_open(&mut self, open: bool) {
-        self.settings_open = open;
-        self.tray.sync(&self.settings, open);
-        self.refresh_widget(false);
     }
 
     fn apply(&mut self, settings: Settings) {
@@ -675,44 +521,38 @@ impl App {
         {
             self.history.clear();
         }
+        let was_sampling = self.is_sampling();
         let interval_changed = self.settings.interval != settings.interval;
         let adapter_changed = self.settings.adapter != settings.adapter;
-        let language_changed = self.settings.language != settings.language;
         self.settings = settings;
         self.light_text = preferences::light_text(self.settings.theme);
-        if interval_changed {
-            self.arm_sample();
-        }
-        if adapter_changed && self.is_sampling() {
+        let sampling = self.is_sampling();
+        if sampling && (!was_sampling || adapter_changed) {
             self.prime_network();
         }
-        if language_changed {
-            self.tray.set_language(self.settings.language);
+        if interval_changed || was_sampling != sampling {
+            self.arm_sample();
         }
-        self.tray.sync(&self.settings, self.settings_open);
         self.refresh_widget(true);
     }
 
     fn menu_action(&mut self, action: usize) {
-        if action == ACTION_TOGGLE_PAUSE {
-            self.toggle_pause();
-            return;
-        }
-        if self.settings_open {
-            self.tray.sync(&self.settings, true);
+        if self.settings_window.is_some() {
             return;
         }
         let mut settings = self.settings.clone();
         match action {
-            ACTION_SHOW => settings.visible = !settings.visible,
-            ACTION_LOCK => settings.locked = !settings.locked,
-            ACTION_RESET => settings.offset = 0,
+            widget_window::ACTION_HIDE => settings.visible = false,
+            widget_window::ACTION_LOCK => settings.locked = !settings.locked,
+            widget_window::ACTION_RESET_POSITION => settings.offset = 0,
             _ => return,
+        }
+        if settings == self.settings {
+            return;
         }
         match settings.save(&self.path) {
             Ok(()) => self.apply(settings),
             Err(error) => {
-                self.tray.sync(&self.settings, self.settings_open);
                 let language = self.settings.language;
                 let message = language.text(
                     "Could not save NetBar settings.",
@@ -726,8 +566,17 @@ impl App {
     fn widget_action(&mut self, action: usize, value: isize) {
         match action {
             widget_window::ACTION_SETTINGS => self.open_settings(),
-            widget_window::ACTION_PAUSE => self.toggle_pause(),
-            widget_window::ACTION_DRAG_BEGIN if !self.settings.locked && !self.settings_open => {
+            widget_window::ACTION_PAUSE => self.set_paused(true),
+            widget_window::ACTION_RESUME => self.set_paused(false),
+            widget_window::ACTION_HIDE
+            | widget_window::ACTION_LOCK
+            | widget_window::ACTION_RESET_POSITION => self.menu_action(action),
+            widget_window::ACTION_EXIT => unsafe {
+                PostMessageW(self.hwnd, WM_CLOSE, 0, 0);
+            },
+            widget_window::ACTION_DRAG_BEGIN
+                if !self.settings.locked && self.settings_window.is_none() =>
+            {
                 self.dragging = Some(Drag {
                     origin: value as i32,
                     offset: self.settings.offset,
@@ -755,6 +604,9 @@ impl App {
         let Some(drag) = self.dragging.take() else {
             return;
         };
+        if self.settings.offset == drag.offset {
+            return;
+        }
         if !save {
             self.settings.offset = drag.offset;
         } else if let Err(error) = self.settings.save(&self.path) {
@@ -766,21 +618,19 @@ impl App {
             );
             show_error(&format!("{message}\n{error}"), language);
         }
-        self.tray.sync(&self.settings, self.settings_open);
         self.refresh_widget(true);
     }
 
     fn message(&mut self, message: u32, word: WPARAM, param: LPARAM) -> Option<LRESULT> {
         unsafe {
-            if message == self.taskbar_created {
+            if self.taskbar_created != 0 && message == self.taskbar_created {
                 self.widget.taskbar_recreated();
-                self.tray.ensure_icon(&self.ui, self.hwnd);
                 return Some(0);
             }
             match message {
                 WM_TIMER => match word {
                     SAMPLE_TIMER if self.is_sampling() => self.sample(),
-                    PLACEMENT_TIMER if !self.suspended => self.refresh_placement(),
+                    PLACEMENT_TIMER if !self.suspended => self.widget.refresh_placement(),
                     NETWORK_TIMER => {
                         KillTimer(self.hwnd, NETWORK_TIMER);
                         if self.is_sampling() {
@@ -791,7 +641,9 @@ impl App {
                     _ => {}
                 },
                 NETWORK_CHANGED if self.is_sampling() => timer(self.hwnd, NETWORK_TIMER, 200, 30),
-                POSITION_CHANGED | WM_DISPLAYCHANGE | WM_DPICHANGED => self.refresh_placement(),
+                POSITION_CHANGED | WM_DISPLAYCHANGE | WM_DPICHANGED => {
+                    self.widget.refresh_placement()
+                }
                 WM_SETTINGCHANGE | WM_THEMECHANGED => {
                     self.light_text = preferences::light_text(self.settings.theme);
                     self.refresh_widget(true);
@@ -819,10 +671,13 @@ impl App {
                     return Some(1);
                 }
                 OPEN_SETTINGS => self.open_settings(),
-                SETTINGS_OPENED => self.set_settings_open(true),
-                SETTINGS_CLOSED => self.set_settings_open(false),
+                SETTINGS_CLOSED => {
+                    if self.settings_window == Some(word) {
+                        self.settings_window = None;
+                        self.refresh_widget(false);
+                    }
+                }
                 SETTINGS_RELOAD => self.apply(Settings::load(&self.path)),
-                MENU_ACTION => self.menu_action(word),
                 widget_window::WIDGET_ACTION => self.widget_action(word, param),
                 WM_DESTROY => {
                     PostQuitMessage(0);

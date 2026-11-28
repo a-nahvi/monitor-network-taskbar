@@ -1,4 +1,3 @@
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::ffi::{OsString, c_void};
 use std::fs::{self, OpenOptions};
@@ -19,18 +18,21 @@ use windows_sys::Win32::System::ApplicationInstallationAndServicing::{
 };
 use windows_sys::Win32::System::Com::CoTaskMemFree;
 use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
-use windows_sys::Win32::UI::Shell::{FOLDERID_LocalAppData, SHGetKnownFolderPath};
+use windows_sys::Win32::UI::{
+    Shell::{FOLDERID_LocalAppData, SHGetKnownFolderPath, ShellExecuteW},
+    WindowsAndMessaging::SW_SHOWNORMAL,
+};
+use windows_sys::w;
 
 const DEFAULT_REPOSITORY: &str = "a-nahvi/monitor-network-taskbar";
+const GITHUB_HOST: &str = "github.com";
 const MSI_UPGRADE_CODE: &str = "{2CC4926F-08F7-4628-9B44-22B9FC00B18C}";
 const MAX_MSI_SIZE: u64 = 64 * 1024 * 1024;
-const MAX_METADATA_SIZE: u64 = 1024 * 1024;
+const MAX_CHECKSUM_SIZE: u64 = 1024;
 
 #[derive(Clone)]
 pub struct AvailableUpdate {
     pub version: String,
-    asset_id: u64,
-    size: u64,
     sha256: [u8; 32],
 }
 
@@ -38,47 +40,54 @@ pub fn check() -> Result<Option<AvailableUpdate>, String> {
     let repository = update_repository()?;
     let client = HttpClient::new()?;
     let request = client.get(
-        "api.github.com",
-        &format!("/repos/{repository}/releases/latest"),
-        "application/vnd.github+json",
+        GITHUB_HOST,
+        &format!("/{repository}/releases/latest"),
+        "text/html",
     )?;
     let status = request.status()?;
-    if status != 200 {
+    if !is_redirect(status) {
         return Err(match status {
-            403 | 429 => "GitHub temporarily restricted the update check. Try again later.".into(),
+            403 | 429 => {
+                "GitHub limited access to Releases. Try again or open Releases in your browser."
+                    .into()
+            }
             404 => "No public release is available from the configured GitHub repository.".into(),
-            status => format!("GitHub release check returned HTTP {status}."),
+            status => format!("Could not find the latest GitHub release (HTTP {status})."),
         });
     }
+    let location = request.redirect_location()?;
+    let (version, released) = release_version(&location, repository)
+        .ok_or("GitHub returned an invalid address for the latest stable release.")?;
+    let installed =
+        version_parts(env!("CARGO_PKG_VERSION")).ok_or("NetBar has an invalid build version.")?;
+    if released <= installed {
+        return Ok(None);
+    }
+
+    let checksum =
+        client.download_asset(repository, version, &format!("NetBar-{version}-SHA256.txt"))?;
     let mut contents = Vec::new();
-    request.copy_to(&mut contents, MAX_METADATA_SIZE)?;
-    let release = serde_json::from_slice::<Value>(&contents)
-        .map_err(|_| "GitHub returned invalid release information.")?;
-    parse_release(&release, env!("CARGO_PKG_VERSION"))
+    checksum.copy_to(&mut contents, MAX_CHECKSUM_SIZE)?;
+    let sha256 = parse_checksum(&contents, &installer_filename(version))
+        .ok_or("The release checksum does not identify the expected NetBar installer.")?;
+    Ok(Some(AvailableUpdate {
+        version: version.into(),
+        sha256,
+    }))
 }
 
 pub fn install(update: &AvailableUpdate) -> Result<(), String> {
     let repository = update_repository()?;
     let client = HttpClient::new()?;
-    let download = client.get(
-        "api.github.com",
-        &format!("/repos/{repository}/releases/assets/{}", update.asset_id),
-        "application/octet-stream",
+    let download = client.download_asset(
+        repository,
+        &update.version,
+        &installer_filename(&update.version),
     )?;
-    let download = match download.status()? {
-        200 => download,
-        301 | 302 | 303 | 307 | 308 => {
-            let location = download.redirect_location()?;
-            let (host, path) = asset_location(&location)
-                .ok_or("GitHub redirected the download to an unrecognized address.")?;
-            let request = client.get(host, path, "application/octet-stream")?;
-            if request.status()? != 200 {
-                return Err("GitHub's download link expired or is unavailable. Try again.".into());
-            }
-            request
-        }
-        status => return Err(format!("GitHub download returned HTTP {status}.")),
-    };
+    let declared_size = download.content_length()?;
+    if declared_size.is_some_and(|size| !(1..=MAX_MSI_SIZE).contains(&size)) {
+        return Err("The release installer has an invalid size.".into());
+    }
     let directory = update_directory()?;
     clean_expired_downloads(&directory);
     let mut staging = tempfile::Builder::new()
@@ -86,7 +95,8 @@ pub fn install(update: &AvailableUpdate) -> Result<(), String> {
         .suffix(".msi")
         .tempfile_in(directory)
         .map_err(|error| format!("Could not stage the update: {error}"))?;
-    if download.copy_to(&mut staging, update.size)? != update.size {
+    let received = download.copy_to(&mut staging, declared_size.unwrap_or(MAX_MSI_SIZE))?;
+    if received == 0 || declared_size.is_some_and(|size| received != size) {
         return Err("The downloaded installer has an unexpected size.".into());
     }
     staging
@@ -128,47 +138,42 @@ pub fn install(update: &AvailableUpdate) -> Result<(), String> {
     Ok(())
 }
 
-fn parse_release(release: &Value, current: &str) -> Result<Option<AvailableUpdate>, String> {
-    if release["draft"].as_bool() != Some(false) || release["prerelease"].as_bool() != Some(false) {
-        return Err("GitHub returned a release outside the stable channel.".into());
+pub fn open_releases() -> Result<(), String> {
+    let url = wide(&format!(
+        "https://{GITHUB_HOST}/{}/releases/latest",
+        update_repository()?
+    ));
+    let result = unsafe {
+        ShellExecuteW(
+            null_mut(),
+            w!("open"),
+            url.as_ptr(),
+            null(),
+            null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    if result as usize <= 32 {
+        return Err("Could not open GitHub Releases in your browser.".into());
     }
-    let version = release["tag_name"]
-        .as_str()
-        .and_then(|tag| tag.strip_prefix('v'))
-        .ok_or("The release tag must use the vMajor.Minor.Patch format.")?;
-    let released = version_parts(version).ok_or("The release tag has an invalid version.")?;
-    let installed = version_parts(current).ok_or("NetBar has an invalid build version.")?;
-    if released <= installed {
-        return Ok(None);
-    }
-    let filename = format!("NetBar-{version}-Setup-x64.msi");
-    let asset = release["assets"]
-        .as_array()
-        .and_then(|assets| {
-            assets
-                .iter()
-                .find(|asset| asset["name"].as_str() == Some(&filename))
-        })
-        .filter(|asset| asset["state"].as_str() == Some("uploaded"))
-        .ok_or_else(|| format!("The release is missing {filename}."))?;
-    let asset_id = asset["id"]
-        .as_u64()
-        .filter(|id| *id > 0)
-        .ok_or("The release installer is missing a valid asset ID.")?;
-    let size = asset["size"]
-        .as_u64()
-        .filter(|size| (1..=MAX_MSI_SIZE).contains(size))
-        .ok_or("The release installer has an invalid size.")?;
-    let sha256 = asset["digest"]
-        .as_str()
-        .and_then(parse_sha256)
-        .ok_or("GitHub did not provide a valid SHA-256 digest for the installer.")?;
-    Ok(Some(AvailableUpdate {
-        version: version.into(),
-        asset_id,
-        size,
-        sha256,
-    }))
+    Ok(())
+}
+
+fn installer_filename(version: &str) -> String {
+    format!("NetBar-{version}-Setup-x64.msi")
+}
+
+fn is_redirect(status: u32) -> bool {
+    matches!(status, 301 | 302 | 303 | 307 | 308)
+}
+
+fn release_version<'a>(location: &'a str, repository: &str) -> Option<(&'a str, [u16; 3])> {
+    let path = location
+        .strip_prefix("https://github.com")
+        .unwrap_or(location);
+    let prefix = format!("/{repository}/releases/tag/v");
+    let version = path.strip_prefix(&prefix)?;
+    Some((version, version_parts(version)?))
 }
 
 fn version_parts(version: &str) -> Option<[u16; 3]> {
@@ -190,9 +195,14 @@ fn version_parts(version: &str) -> Option<[u16; 3]> {
     fields.next().is_none().then_some(result)
 }
 
-fn parse_sha256(digest: &str) -> Option<[u8; 32]> {
-    let hex = digest.strip_prefix("sha256:")?;
-    if hex.len() != 64 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+fn parse_checksum(contents: &[u8], filename: &str) -> Option<[u8; 32]> {
+    let mut fields = std::str::from_utf8(contents).ok()?.split_ascii_whitespace();
+    let hex = fields.next()?;
+    if fields.next()? != filename
+        || fields.next().is_some()
+        || hex.len() != 64
+        || !hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
         return None;
     }
     let mut result = [0; 32];
@@ -297,13 +307,38 @@ impl HttpClient {
         Ok(Self(session))
     }
 
+    fn download_asset(
+        &self,
+        repository: &str,
+        version: &str,
+        filename: &str,
+    ) -> Result<Response<'_>, String> {
+        let request = self.get(
+            GITHUB_HOST,
+            &format!("/{repository}/releases/download/v{version}/{filename}"),
+            "application/octet-stream",
+        )?;
+        let status = request.status()?;
+        if status == 200 {
+            return Ok(request);
+        }
+        if !is_redirect(status) {
+            return Err(format!(
+                "GitHub could not download {filename} (HTTP {status})."
+            ));
+        }
+        let location = request.redirect_location()?;
+        let (host, path) = asset_location(&location)
+            .ok_or("GitHub redirected the download to an unrecognized address.")?;
+        let download = self.get(host, path, "application/octet-stream")?;
+        if download.status()? != 200 {
+            return Err("GitHub's download link expired or is unavailable. Try again.".into());
+        }
+        Ok(download)
+    }
+
     fn get(&self, host: &str, path: &str, accept: &str) -> Result<Response<'_>, String> {
-        let api_version = if host == "api.github.com" {
-            "X-GitHub-Api-Version: 2022-11-28\r\n"
-        } else {
-            ""
-        };
-        let headers = wide(&format!("Accept: {accept}\r\n{api_version}"));
+        let headers = wide(&format!("Accept: {accept}\r\n"));
         let host = wide(host);
         let connection = InternetHandle::new(
             unsafe { WinHttpConnect(self.0.0, host.as_ptr(), 443, 0) },
@@ -359,22 +394,39 @@ struct Response<'a> {
 
 impl Response<'_> {
     fn status(&self) -> Result<u32, String> {
-        let mut status = 0u32;
-        let mut length = size_of_val(&status) as u32;
+        self.numeric_header(WINHTTP_QUERY_STATUS_CODE)
+            .map_err(|error| format!("Could not read the GitHub response status: {error}"))?
+            .ok_or_else(|| "GitHub did not provide a response status.".into())
+    }
+
+    fn content_length(&self) -> Result<Option<u64>, String> {
+        self.numeric_header(WINHTTP_QUERY_CONTENT_LENGTH)
+            .map(|length| length.map(u64::from))
+            .map_err(|error| format!("Could not read the GitHub asset size: {error}"))
+    }
+
+    fn numeric_header(&self, header: u32) -> io::Result<Option<u32>> {
+        let mut value = 0u32;
+        let mut length = size_of_val(&value) as u32;
         let found = unsafe {
             WinHttpQueryHeaders(
                 self.request.0,
-                WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                header | WINHTTP_QUERY_FLAG_NUMBER,
                 null(),
-                (&raw mut status).cast(),
+                (&raw mut value).cast(),
                 &mut length,
                 null_mut(),
             )
         };
         if found == 0 {
-            return Err(windows_error("Could not read the GitHub response status"));
+            let error = io::Error::last_os_error();
+            return if error.raw_os_error() == Some(ERROR_WINHTTP_HEADER_NOT_FOUND as i32) {
+                Ok(None)
+            } else {
+                Err(error)
+            };
         }
-        Ok(status)
+        Ok(Some(value))
     }
 
     fn redirect_location(&self) -> Result<String, String> {
@@ -391,7 +443,7 @@ impl Response<'_> {
             )
         };
         if found == 0 {
-            return Err("GitHub returned an invalid download redirect.".into());
+            return Err("GitHub returned an invalid redirect.".into());
         }
         String::from_utf16(&buffer[..length as usize / 2])
             .map_err(|_| "GitHub returned an invalid download address.".into())
@@ -539,28 +591,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn release_requires_the_expected_newer_installer_and_digest() {
-        let mut release = serde_json::json!({
-            "draft": false,
-            "prerelease": false,
-            "tag_name": "v2.0.0",
-            "assets": [{
-                "name": "NetBar-2.0.0-Setup-x64.msi",
-                "state": "uploaded",
-                "id": 7,
-                "size": 1024,
-                "digest": format!("sha256:{}", "ab".repeat(32)),
-            }]
-        });
-        let update = parse_release(&release, "1.3.0").unwrap().unwrap();
-        assert_eq!(update.version, "2.0.0");
-        assert_eq!(update.sha256, [0xab; 32]);
-        assert!(parse_release(&release, "2.0.0").unwrap().is_none());
-        assert!(parse_release(&release, "2.1.0").unwrap().is_none());
-        release["assets"][0]["digest"] = Value::Null;
-        assert!(parse_release(&release, "1.3.0").is_err());
-        release["assets"][0]["name"] = "NetBar-2.0.0-Setup-arm64.msi".into();
-        assert!(parse_release(&release, "1.3.0").is_err());
+    fn latest_release_redirect_requires_the_expected_repository_and_stable_tag() {
+        let path = "/a-nahvi/monitor-network-taskbar/releases/tag/v2.4.0";
+        for location in [path.to_owned(), format!("https://github.com{path}")] {
+            assert_eq!(
+                release_version(&location, DEFAULT_REPOSITORY),
+                Some(("2.4.0", [2, 4, 0]))
+            );
+        }
+        for location in [
+            format!("http://github.com{path}"),
+            format!("https://github.com.example.org{path}"),
+            format!("https://github.com@elsewhere.example{path}"),
+            path.replace("a-nahvi/", "someone-else/"),
+            format!("{path}-beta"),
+            format!("{path}?from=latest"),
+            path.replace("v2.4.0", "v02.4.0"),
+        ] {
+            assert!(
+                release_version(&location, DEFAULT_REPOSITORY).is_none(),
+                "Accepted {location}"
+            );
+        }
+    }
+
+    #[test]
+    fn published_checksum_binds_the_digest_to_the_exact_installer_name() {
+        let filename = installer_filename("2.4.0");
+        let hex = "aB".repeat(32);
+        let line = format!("{hex}  {filename}\r\n");
+        assert_eq!(parse_checksum(line.as_bytes(), &filename), Some([0xab; 32]));
+        for text in [
+            format!("{hex}  NetBar-2.4.0-Setup-arm64.msi\n"),
+            format!("{hex}  NetBar-2.3.1-Setup-x64.msi\n"),
+            format!("{}  {filename}\n", &hex[..62]),
+            format!("{line}{line}"),
+            "<!doctype html>".into(),
+        ] {
+            assert!(parse_checksum(text.as_bytes(), &filename).is_none());
+        }
     }
 
     #[test]

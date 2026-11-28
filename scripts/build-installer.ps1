@@ -170,8 +170,8 @@ try {
     Row Registry @('InstallVersion', 1, 'Software\NetBar', 'Version', $PackageVersion, 'Application')
     Row Registry @('MenuInstalled', 1, 'Software\NetBar', 'MenuInstalled', '#1', 'StartMenu')
     Row Registry @('LicenseInstalled', 1, 'Software\NetBar', 'LicenseInstalled', '#1', 'License')
-    Row Shortcut @('NetBarShortcut', 'NetBarMenu', 'NetBar', 'StartMenu', '[#NetBarExe]', $null,
-                   'Show upload and download speeds beside the clock.', $null, $null, $null, 1, 'INSTALLDIR')
+    Row Shortcut @('NetBarShortcut', 'NetBarMenu', 'NetBar', 'StartMenu', '[#NetBarExe]', '--settings',
+                   'Open NetBar settings and start the taskbar monitor.', $null, $null, $null, 1, 'INSTALLDIR')
     Row RemoveFile @('RemoveMenuFolder', 'StartMenu', $null, 'NetBarMenu', 2)
     Row RemoveFile @('RemoveApplicationFolder', 'Application', $null, 'INSTALLDIR', 2)
     Row Upgrade @($upgradeCode, '0.0.0', $PackageVersion, $null, 256, $null, 'OLDPRODUCTS')
@@ -259,7 +259,7 @@ try {
     Event 'ConfirmCancelDlg' 'No' 'EndDialog' 'Return'
     Dialog 'ExitDlg' 'Launch' 'Finish' 'Finish'
     Control 'ExitDlg' 'Title' 'Text' 20 15 330 24 '{\DlgTitle}Setup complete'
-    Control 'ExitDlg' 'Description' 'Text' 20 55 330 72 "NetBar setup completed successfully.`r`n`r`nRight-click the readings or the NetBar tray icon to adjust the display."
+    Control 'ExitDlg' 'Description' 'Text' 20 55 330 72 "NetBar setup completed successfully.`r`n`r`nRight-click the readings for controls. Open NetBar from Start if the readings are hidden."
     Control 'ExitDlg' 'Removed' 'Text' 20 55 330 72 "NetBar has been uninstalled.`r`n`r`nYour preferences have been kept for a later reinstall."
     Control 'ExitDlg' 'Launch' 'CheckBox' 20 155 260 20 'Launch NetBar' 'Finish' 'LAUNCHNETBAR'
     Control 'ExitDlg' 'Finish' 'PushButton' 284 200 66 18 'Finish' 'Launch'
