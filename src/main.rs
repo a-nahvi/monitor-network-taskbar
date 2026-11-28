@@ -773,7 +773,8 @@ impl App {
     fn message(&mut self, message: u32, word: WPARAM, param: LPARAM) -> Option<LRESULT> {
         unsafe {
             if message == self.taskbar_created {
-                self.refresh_placement();
+                self.widget.taskbar_recreated();
+                self.tray.ensure_icon(&self.ui, self.hwnd);
                 return Some(0);
             }
             match message {

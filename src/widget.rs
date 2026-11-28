@@ -203,7 +203,18 @@ impl Widget {
             .window
             .as_ref()
             .map_or(self.control, WidgetWindow::hwnd);
-        if !self.taskbar.refresh(own) {
+        let taskbar_visible = self.taskbar.refresh(own);
+        if self
+            .window
+            .as_ref()
+            .is_some_and(|window| !window.belongs_to(self.taskbar.window))
+        {
+            // Explorer may destroy its owned window when it replaces the taskbar.
+            self.window = None;
+            self.position = None;
+            self.next_window_attempt = None;
+        }
+        if !taskbar_visible {
             self.hide();
             return;
         }
@@ -218,7 +229,7 @@ impl Widget {
                 .next_window_attempt
                 .is_none_or(|time| Instant::now() >= time)
         {
-            match WidgetWindow::new(&self.app, self.control) {
+            match WidgetWindow::new(&self.app, self.control, self.taskbar.window) {
                 Ok(window) => {
                     window.set_draggable(self.draggable);
                     self.window = Some(window);
@@ -266,21 +277,25 @@ impl Widget {
         {
             self.position = Some(position);
         }
-        if self.position == Some(position)
-            && (unsafe { IsWindowVisible(hwnd) } == 0 || self.taskbar.above(hwnd))
-        {
+        if self.position == Some(position) && unsafe { IsWindowVisible(hwnd) } == 0 {
             unsafe {
                 SetWindowPos(
                     hwnd,
-                    HWND_TOPMOST,
+                    null_mut(),
                     0,
                     0,
                     0,
                     0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW,
                 );
             }
         }
+    }
+
+    pub fn taskbar_recreated(&mut self) {
+        self.taskbar = Taskbar::default();
+        self.next_window_attempt = None;
+        self.refresh_placement();
     }
 
     fn hide(&mut self) {
@@ -441,22 +456,6 @@ impl Taskbar {
         let top = self.bounds.top + (height - size.cy) / 2;
         Some((left, top))
     }
-
-    fn above(&self, own: HWND) -> bool {
-        unsafe {
-            let mut above = GetWindow(own, GW_HWNDPREV);
-            for _ in 0..64 {
-                if above.is_null() {
-                    break;
-                }
-                if above == self.window {
-                    return true;
-                }
-                above = GetWindow(above, GW_HWNDPREV);
-            }
-        }
-        false
-    }
 }
 
 unsafe extern "system" fn locate_tray(window: HWND, out: LPARAM) -> i32 {
@@ -535,19 +534,18 @@ fn scaled(logical: i32, dpi: u32) -> i32 {
     (logical * dpi as i32 + 48 * logical.signum()) / 96
 }
 
-struct Surface {
+const TEXT_MASK_SCALE: i32 = 2;
+const HIT_TEST_PIXEL: u32 = 0x0100_0000;
+
+struct Dib {
     dc: HDC,
     bitmap: HBITMAP,
-    font: HFONT,
     pixels: NonNull<u32>,
-    width: i32,
-    height: i32,
-    font_size: i32,
-    value_width: i32,
+    len: usize,
 }
 
-impl Surface {
-    fn create(size: SIZE, font_size: i32) -> Option<Self> {
+impl Dib {
+    fn create(size: SIZE) -> Option<Self> {
         unsafe {
             let dc = CreateCompatibleDC(null_mut());
             if dc.is_null() {
@@ -580,46 +578,165 @@ impl Surface {
                 DeleteDC(dc);
                 return None;
             }
-            let font = if font_size > 0 {
-                CreateFontW(
-                    -font_size,
-                    0,
-                    0,
-                    0,
-                    FW_NORMAL as i32,
-                    0,
-                    0,
-                    0,
-                    DEFAULT_CHARSET as u32,
-                    0,
-                    0,
-                    ANTIALIASED_QUALITY as u32,
-                    0,
-                    w!("Segoe UI"),
-                )
-            } else {
-                null_mut()
-            };
-            if !font.is_null() {
-                SelectObject(dc, font);
+            Some(Self {
+                dc,
+                bitmap,
+                pixels,
+                len: size.cx as usize * size.cy as usize,
+            })
+        }
+    }
+
+    fn pixels(&mut self) -> &mut [u32] {
+        unsafe { std::slice::from_raw_parts_mut(self.pixels.as_ptr(), self.len) }
+    }
+}
+
+impl Drop for Dib {
+    fn drop(&mut self) {
+        unsafe {
+            DeleteDC(self.dc);
+            DeleteObject(self.bitmap);
+        }
+    }
+}
+
+struct TextMask {
+    dib: Dib,
+    font: HFONT,
+    previous_font: HGDIOBJ,
+    size: SIZE,
+    value_width: i32,
+}
+
+impl TextMask {
+    fn create(size: SIZE, font_size: i32) -> Option<Self> {
+        let size = SIZE {
+            cx: size.cx * TEXT_MASK_SCALE,
+            cy: size.cy * TEXT_MASK_SCALE,
+        };
+        let font_size = font_size * TEXT_MASK_SCALE;
+        let dib = Dib::create(size)?;
+        let dc = dib.dc;
+        unsafe {
+            let font = CreateFontW(
+                -font_size,
+                0,
+                0,
+                0,
+                FW_NORMAL as i32,
+                0,
+                0,
+                0,
+                DEFAULT_CHARSET as u32,
+                0,
+                0,
+                ANTIALIASED_QUALITY as u32,
+                0,
+                w!("Segoe UI"),
+            );
+            if font.is_null() {
+                return None;
+            }
+            let previous_font = SelectObject(dc, font);
+            if previous_font.is_null() {
+                DeleteObject(font);
+                return None;
             }
             let mut value_size = SIZE::default();
-            if font_size > 0 && GetTextExtentPoint32W(dc, w!("0000"), 4, &mut value_size) == 0 {
+            if GetTextExtentPoint32W(dc, w!("0000"), 4, &mut value_size) == 0 {
                 value_size.cx = font_size * 3;
             }
             SetBkMode(dc, TRANSPARENT as i32);
             SetTextColor(dc, 0x00FF_FFFF);
             Some(Self {
-                dc,
-                bitmap,
+                dib,
                 font,
-                pixels,
-                width: size.cx,
-                height: size.cy,
-                font_size,
+                previous_font,
+                size,
                 value_width: value_size.cx,
             })
         }
+    }
+
+    fn draw(&mut self, rates: &[String; 2], dpi: u32) -> &[u32] {
+        self.dib.pixels().fill(0);
+        let half = self.size.cy / TEXT_MASK_SCALE / 2 * TEXT_MASK_SCALE;
+        let value_left = scaled(TEXT_LEFT, dpi) * TEXT_MASK_SCALE;
+        let unit_left = value_left + self.value_width + scaled(UNIT_GAP, dpi) * TEXT_MASK_SCALE;
+        for (row, value) in rates.iter().enumerate() {
+            let (number, unit) = value.rsplit_once(' ').unwrap_or((value, ""));
+            let bounds = RECT {
+                left: value_left,
+                top: half * row as i32,
+                right: unit_left,
+                bottom: if row == 0 { half } else { self.size.cy },
+            };
+            self.draw_field(number, bounds);
+            if !unit.is_empty() {
+                self.draw_field(
+                    unit,
+                    RECT {
+                        left: unit_left,
+                        right: self.size.cx - scaled(2, dpi) * TEXT_MASK_SCALE,
+                        ..bounds
+                    },
+                );
+            }
+        }
+        unsafe { GdiFlush() };
+        self.dib.pixels()
+    }
+
+    fn draw_field(&self, text: &str, mut bounds: RECT) {
+        let mut utf16 = [0u16; 32];
+        let mut length = 0;
+        for (next, slot) in text.encode_utf16().zip(&mut utf16) {
+            *slot = next;
+            length += 1;
+        }
+        unsafe {
+            DrawTextW(
+                self.dib.dc,
+                utf16.as_ptr(),
+                length,
+                &mut bounds,
+                DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS,
+            );
+        }
+    }
+}
+
+impl Drop for TextMask {
+    fn drop(&mut self) {
+        unsafe {
+            SelectObject(self.dib.dc, self.previous_font);
+            DeleteObject(self.font);
+        }
+    }
+}
+
+struct Surface {
+    frame: Dib,
+    text: Option<TextMask>,
+    width: i32,
+    height: i32,
+    font_size: i32,
+}
+
+impl Surface {
+    fn create(size: SIZE, font_size: i32) -> Option<Self> {
+        Some(Self {
+            frame: Dib::create(size)?,
+            text: if font_size > 0 {
+                Some(TextMask::create(size, font_size)?)
+            } else {
+                None
+            },
+            width: size.cx,
+            height: size.cy,
+            font_size,
+        })
     }
 
     fn paint(
@@ -631,29 +748,37 @@ impl Surface {
     ) {
         let palette = appearance.palette();
         let width = self.width as usize;
-        let height = self.height as usize;
-        if traces.is_none() {
-            // Clear the owned top-down DIB before populating the native text mask.
-            unsafe { self.pixels.as_ptr().write_bytes(0, width * height) };
-            self.draw_text(rates, dpi);
-        }
-        // DrawText draws a grayscale mask over black. After GdiFlush, Rust owns the pixel writes.
-        let pixels =
-            unsafe { std::slice::from_raw_parts_mut(self.pixels.as_ptr(), width * height) };
-        if traces.is_some() {
-            pixels.fill(0x0100_0000);
-        } else {
-            for (y, row) in pixels.chunks_exact_mut(width).enumerate() {
+        let pixels = self.frame.pixels();
+        if let Some(text) = &mut self.text {
+            // GDI can switch tiny glyphs to monochrome. Average the 2× grayscale mask
+            // into physical pixels so edge coverage survives without subpixel colors.
+            let mask = text.draw(rates, dpi);
+            let stride = width * TEXT_MASK_SCALE as usize;
+            for (y, (row, samples)) in pixels
+                .chunks_exact_mut(width)
+                .zip(mask.chunks_exact(stride * TEXT_MASK_SCALE as usize))
+                .enumerate()
+            {
                 let color = palette[usize::from(y as i32 >= self.height / 2)];
-                for pixel in row {
-                    let alpha = *pixel as u8;
+                let (top, bottom) = samples.split_at(stride);
+                let (top, _) = top.as_chunks::<2>();
+                let (bottom, _) = bottom.as_chunks::<2>();
+                let samples = top.iter().zip(bottom);
+                for (pixel, (a, b)) in row.iter_mut().zip(samples) {
+                    let coverage = u16::from(a[0] as u8)
+                        + u16::from(a[1] as u8)
+                        + u16::from(b[0] as u8)
+                        + u16::from(b[1] as u8);
+                    let alpha = ((coverage + 2) / 4) as u8;
                     *pixel = if alpha == 0 {
-                        0x0100_0000
+                        HIT_TEST_PIXEL
                     } else {
                         premultiplied(color, alpha)
                     };
                 }
             }
+        } else {
+            pixels.fill(HIT_TEST_PIXEL);
         }
 
         let mut painter = Painter {
@@ -711,51 +836,6 @@ impl Surface {
         }
     }
 
-    fn draw_text(&self, rates: &[String; 2], dpi: u32) {
-        let half = self.height / 2;
-        let value_left = scaled(TEXT_LEFT, dpi);
-        let unit_left = value_left + self.value_width + scaled(UNIT_GAP, dpi);
-        for (row, value) in rates.iter().enumerate() {
-            let (number, unit) = value.rsplit_once(' ').unwrap_or((value, ""));
-            let bounds = RECT {
-                left: value_left,
-                top: half * row as i32,
-                right: unit_left,
-                bottom: if row == 0 { half } else { self.height },
-            };
-            self.draw_text_field(number, bounds);
-            if !unit.is_empty() {
-                self.draw_text_field(
-                    unit,
-                    RECT {
-                        left: unit_left,
-                        right: self.width - scaled(2, dpi),
-                        ..bounds
-                    },
-                );
-            }
-        }
-        unsafe { GdiFlush() };
-    }
-
-    fn draw_text_field(&self, text: &str, mut bounds: RECT) {
-        let mut utf16 = [0u16; 32];
-        let mut length = 0;
-        for (next, slot) in text.encode_utf16().zip(&mut utf16) {
-            *slot = next;
-            length += 1;
-        }
-        unsafe {
-            DrawTextW(
-                self.dc,
-                utf16.as_ptr(),
-                length,
-                &mut bounds,
-                DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS,
-            );
-        }
-    }
-
     fn submit(&self, hwnd: HWND, x: i32, y: i32) -> bool {
         let blend = BLENDFUNCTION {
             BlendOp: AC_SRC_OVER as u8,
@@ -772,24 +852,12 @@ impl Surface {
                     cx: self.width,
                     cy: self.height,
                 },
-                self.dc,
+                self.frame.dc,
                 &POINT::default(),
                 0,
                 &blend,
                 ULW_ALPHA,
             ) != 0
-        }
-    }
-}
-
-impl Drop for Surface {
-    fn drop(&mut self) {
-        unsafe {
-            DeleteDC(self.dc);
-            DeleteObject(self.bitmap);
-            if !self.font.is_null() {
-                DeleteObject(self.font);
-            }
         }
     }
 }
@@ -846,4 +914,69 @@ fn over(background: u32, color: Color, alpha: u8) -> u32 {
     u32::from_be_bytes(std::array::from_fn(|channel| {
         foreground[channel] + ((u32::from(background[channel]) * remaining + 127) / 255) as u8
     }))
+}
+
+#[cfg(test)]
+mod render_tests {
+    use super::*;
+
+    #[test]
+    fn number_and_unit_edges_stay_smooth_and_aligned_at_taskbar_dpi() {
+        let rates = ["7.6 KB/s".to_owned(), "58.4 KB/s".to_owned()];
+        for dpi in [96, 120, 144, 192] {
+            for light_text in [false, true] {
+                let appearance = Appearance {
+                    visible: true,
+                    graph: false,
+                    graph_width: 88,
+                    text_size: 11,
+                    light_text,
+                    horizontal_offset: 0,
+                    colors: [None; 2],
+                    connected: true,
+                };
+                let mut surface = Surface::create(appearance.size(dpi), scaled(11, dpi)).unwrap();
+                surface.paint(appearance, &rates, None, dpi);
+                let width = surface.width as usize;
+                let half = surface.height as usize / 2;
+                let value_column = scaled(TEXT_LEFT, dpi) as usize;
+                let unit_column = value_column
+                    + (surface.text.as_ref().unwrap().value_width / TEXT_MASK_SCALE) as usize
+                    + scaled(UNIT_GAP, dpi) as usize;
+                let pixels = surface.frame.pixels();
+                assert_eq!(pixels[0], HIT_TEST_PIXEL);
+
+                let first_drawn = |row: &[u32], x: usize| {
+                    row.chunks_exact(width)
+                        .filter_map(|line| {
+                            line[x..].iter().position(|&pixel| pixel != HIT_TEST_PIXEL)
+                        })
+                        .min()
+                };
+                let (upload, download) = pixels.split_at(half * width);
+                assert!(first_drawn(upload, unit_column).is_some(), "DPI {dpi}");
+                assert_eq!(
+                    first_drawn(upload, unit_column),
+                    first_drawn(download, unit_column),
+                    "DPI {dpi}"
+                );
+                for row in [upload, download] {
+                    for field in [value_column..unit_column, unit_column..width] {
+                        let mut smoothed = false;
+                        for line in row.chunks_exact(width) {
+                            for pixel in &line[field.clone()] {
+                                let [alpha, red, green, blue] = pixel.to_be_bytes();
+                                smoothed |= alpha > 1 && alpha < 255;
+                                assert!(red == green && green == blue && blue <= alpha);
+                            }
+                        }
+                        assert!(
+                            smoothed,
+                            "DPI {dpi}, light text {light_text}, field {field:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
