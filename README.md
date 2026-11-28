@@ -1,12 +1,12 @@
 # NetBar
 
+**English** · [فارسی](README.fa.md)
+
 [![Windows CI](https://github.com/a-nahvi/monitor-network-taskbar/actions/workflows/ci.yml/badge.svg)](https://github.com/a-nahvi/monitor-network-taskbar/actions/workflows/ci.yml)
 
 Live upload and download rates next to the system tray on Windows 11 x64. Use compact numbers or a 60-second graph. NetBar is built with Rust and Tauri and draws the taskbar widget to a cached Windows bitmap.
 
 **[Download the latest Windows installer](https://github.com/a-nahvi/monitor-network-taskbar/releases/latest)** · [Report an issue](https://github.com/a-nahvi/monitor-network-taskbar/issues)
-
-![NetBar Display settings in dark mode, with upload and download readings in the taskbar preview](resources/screenshots/settings.png)
 
 ## Install and update
 
@@ -25,10 +25,20 @@ Get-FileHash -Algorithm SHA256 -Path .\NetBar-*-Setup-x64.msi
 
 - **Right-click** the widget to pause or resume readings. Upload is the top row and download is the bottom row.
 - **Double-click** the widget or select **Settings** from the tray menu. Use **Display** for the layout, colors, position, and startup. Unlock the widget to drag it along the taskbar.
-- Choose English or Persian under **Display → Language**, then select **Save changes**. English uses a left-to-right settings layout. Persian uses a right-to-left layout.
+- Choose English or Persian under **Display → Language**, then select **Save changes**. The settings layout switches direction as soon as you choose a language. The tray menu uses your saved language.
 - Use **Network** to select an adapter, change the refresh interval, or switch between bytes and bits per second. Automatic selection prefers an active physical adapter to avoid double-counting VPN traffic.
 
 The widget runs on the primary horizontal taskbar. It hides over fullscreen applications and when the taskbar moves out of view. Opening Settings loads the Microsoft Edge WebView2 Runtime included with Windows 11. [Microsoft Edge WebView2](https://developer.microsoft.com/microsoft-edge/webview2/)
+
+## Settings screenshots
+
+### English (left-to-right)
+
+![NetBar Display settings in English with a left-aligned sidebar and the language set to English](resources/screenshots/settings-en.png)
+
+### Persian (right-to-left)
+
+![NetBar Display settings in Persian with a right-aligned sidebar and the language set to فارسی](resources/screenshots/settings-fa.png)
 
 ## Performance
 
