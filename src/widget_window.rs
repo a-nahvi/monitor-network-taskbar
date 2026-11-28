@@ -36,10 +36,12 @@ pub struct WidgetWindow {
 }
 
 impl WidgetWindow {
-    pub fn new(app: &AppHandle, owner: HWND) -> tauri::Result<Self> {
+    pub fn new(app: &AppHandle, control: HWND, taskbar: HWND) -> tauri::Result<Self> {
         let window = WindowBuilder::new(app, "widget")
             .title("NetBar widget")
             .window_classname("NetBar.Tauri.Widget.v2")
+            // Windows keeps the popup above its owner when Explorer reorders the taskbar.
+            .owner_raw(windows::Win32::Foundation::HWND(taskbar))
             .inner_size(1.0, 1.0)
             .decorations(false)
             .resizable(false)
@@ -51,12 +53,12 @@ impl WidgetWindow {
             .visible(false)
             .build()?;
         let hwnd = window.hwnd()?.0 as usize;
-        let owner = owner as usize;
+        let control = control as usize;
         let draggable = Arc::new(AtomicBool::new(false));
         let callback_draggable = Arc::clone(&draggable);
         let (done, ready) = mpsc::sync_channel(1);
         let result = app.run_on_main_thread(move || {
-            let _ = done.send(install_subclass(hwnd as HWND, owner, callback_draggable));
+            let _ = done.send(install_subclass(hwnd as HWND, control, callback_draggable));
         });
         let prepared = result.and_then(|()| {
             ready
@@ -77,6 +79,14 @@ impl WidgetWindow {
 
     pub fn hwnd(&self) -> HWND {
         self.hwnd as HWND
+    }
+
+    pub fn belongs_to(&self, taskbar: HWND) -> bool {
+        unsafe {
+            !taskbar.is_null()
+                && IsWindow(self.hwnd()) != 0
+                && GetWindow(self.hwnd(), GW_OWNER) == taskbar
+        }
     }
 
     pub fn set_draggable(&self, draggable: bool) {

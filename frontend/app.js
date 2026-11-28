@@ -424,7 +424,7 @@ async function initialize() {
   try {
     state = invoke ? await invoke("settings_state") : {
       settings: defaultSettings, defaults: defaultSettings, adapters: [], startupEnabled: false,
-      startupAllowed: false, updatesAllowed: false, version: "2.3.0", preview: true,
+      startupAllowed: false, updatesAllowed: false, version: "2.3.1", preview: true,
     };
     settings = { ...state.settings, language: state.settings.language === "persian" ? "persian" : "english" };
     savedSettings = { ...settings };

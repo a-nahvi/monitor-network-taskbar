@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.3.1]
+
+- Smooth the edges of small numbers and units in the taskbar widget.
+- Keep the widget visible when interacting with the taskbar.
+
 ## [2.3.0]
 
 - Choose English or Persian in Display settings. NetBar remembers the selected language and switches the settings layout between left-to-right and right-to-left.
@@ -33,6 +38,7 @@
 - Rewrite NetBar in Rust and preserve upgrades from the original Windows installer.
 - Add update checking and verified MSI installation in Settings.
 
+[2.3.1]: https://github.com/a-nahvi/monitor-network-taskbar/releases/tag/v2.3.1
 [2.3.0]: https://github.com/a-nahvi/monitor-network-taskbar/releases/tag/v2.3.0
 [2.2.1]: https://github.com/a-nahvi/monitor-network-taskbar/releases/tag/v2.2.1
 [2.2.0]: https://github.com/a-nahvi/monitor-network-taskbar/releases/tag/v2.2.0
