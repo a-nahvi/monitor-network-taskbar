@@ -51,17 +51,23 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 
 button { color: inherit; }
 h1, h2, p, figure { margin: 0; }
-.icon-definitions { position: absolute; width: 0; height: 0; overflow: hidden; }
 .icon {
+  display: inline-block;
   width: 19px;
   height: 19px;
   flex: 0 0 auto;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.75;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  background-color: currentColor;
+  mask: var(--icon) center / contain no-repeat;
 }
+.icon-arrow-down { --icon: url("icons/arrow-down.png"); }
+.icon-arrow-up { --icon: url("icons/arrow-up.png"); }
+.icon-battery { --icon: url("icons/battery.png"); }
+.icon-display { --icon: url("icons/display.png"); }
+.icon-graph { --icon: url("icons/graph.png"); }
+.icon-network { --icon: url("icons/network.png"); }
+.icon-numbers { --icon: url("icons/numbers.png"); }
+.icon-sound { --icon: url("icons/sound.png"); }
+.icon-updates { --icon: url("icons/updates.png"); }
 
 .settings-shell {
   display: grid;
@@ -201,7 +207,7 @@ h1, h2, p, figure { margin: 0; }
   font-variant-numeric: tabular-nums;
 }
 .preview-rates > span { display: contents; white-space: nowrap; }
-.preview-rates .icon { width: 13px; height: 13px; stroke-width: 2; }
+.preview-rates .icon { width: 13px; height: 13px; }
 .rate-upload { color: var(--preview-upload, inherit); }
 .rate-download { color: var(--preview-download, inherit); }
 #preview-graph { display: block; width: 100%; height: 40px; }

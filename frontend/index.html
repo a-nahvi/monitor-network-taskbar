@@ -9,41 +9,11 @@
   <script src="app.js" defer></script>
 </head>
 <body>
-  <svg xmlns="http://www.w3.org/2000/svg" class="icon-definitions" aria-hidden="true">
-    <symbol id="icon-display" viewBox="0 0 24 24">
-      <rect x="3.5" y="5" width="17" height="14" rx="2"/>
-      <path d="M3.5 14h17m-6 2.5h3"/>
-    </symbol>
-    <symbol id="icon-network" viewBox="0 0 24 24">
-      <path d="M3 8.5a13.5 13.5 0 0 1 18 0m-15 4a9 9 0 0 1 12 0m-9 4a4.5 4.5 0 0 1 6 0"/>
-      <circle cx="12" cy="20" r=".8" fill="currentColor" stroke="none"/>
-    </symbol>
-    <symbol id="icon-updates" viewBox="0 0 24 24">
-      <path d="M19.5 11a7.5 7.5 0 0 0-12.9-4.4L4 9m0-5v5h5m-4.5 4a7.5 7.5 0 0 0 12.9 4.4L20 15m0 5v-5h-5"/>
-    </symbol>
-    <symbol id="icon-numbers" viewBox="0 0 24 24">
-      <path d="M8 6v12m-3-9 3-3 3 3m2 6 3 3 3-3m-3 3V6"/>
-    </symbol>
-    <symbol id="icon-graph" viewBox="0 0 24 24">
-      <path d="M3.5 18.5h17m-16-3L9 11l3 2 4-6 4 3.5"/>
-    </symbol>
-    <symbol id="icon-sound" viewBox="0 0 24 24">
-      <path d="M4 10h3l4-4v12l-4-4H4zm10.5-1.5a5 5 0 0 1 0 7m2-9a8 8 0 0 1 0 11"/>
-    </symbol>
-    <symbol id="icon-battery" viewBox="0 0 24 24">
-      <rect x="3" y="7" width="16" height="10" rx="1.5"/>
-      <path d="M21 10v4M6 10h10v4H6z" fill="currentColor" stroke="none"/>
-    </symbol>
-    <symbol id="icon-check" viewBox="0 0 24 24">
-      <path d="m5.5 12 4.5 4.5 8.5-9"/>
-    </symbol>
-  </svg>
-
   <div class="settings-shell">
     <aside class="sidebar">
       <div class="brand">
         <span class="brand-mark" aria-hidden="true">
-          <svg class="icon"><use href="#icon-numbers"></use></svg>
+          <span class="icon icon-numbers" aria-hidden="true"></span>
           <img id="app-icon" src="icon.png" alt="" hidden>
         </span>
         <div><strong>NetBar</strong><span>Settings</span></div>
@@ -51,13 +21,13 @@
 
       <nav class="navigation" role="tablist" aria-label="Settings sections" aria-orientation="vertical">
         <button type="button" id="tab-display" class="nav-item" role="tab" aria-selected="true" aria-controls="panel-display" data-tab="display">
-          <svg class="icon" aria-hidden="true"><use href="#icon-display"></use></svg> Display
+          <span class="icon icon-display" aria-hidden="true"></span> Display
         </button>
         <button type="button" id="tab-network" class="nav-item" role="tab" aria-selected="false" aria-controls="panel-network" data-tab="network" tabindex="-1">
-          <svg class="icon" aria-hidden="true"><use href="#icon-network"></use></svg> Network
+          <span class="icon icon-network" aria-hidden="true"></span> Network
         </button>
         <button type="button" id="tab-updates" class="nav-item" role="tab" aria-selected="false" aria-controls="panel-updates" data-tab="updates" tabindex="-1">
-          <svg class="icon" aria-hidden="true"><use href="#icon-updates"></use></svg> Updates
+          <span class="icon icon-updates" aria-hidden="true"></span> Updates
         </button>
       </nav>
 
@@ -74,25 +44,25 @@
             </header>
 
             <figure class="preview" aria-labelledby="preview-label">
-              <figcaption id="preview-label"><svg class="icon" aria-hidden="true"><use href="#icon-display"></use></svg> Taskbar preview</figcaption>
+              <figcaption id="preview-label"><span class="icon icon-display" aria-hidden="true"></span> Taskbar preview</figcaption>
               <div class="preview-track" id="preview-track" aria-hidden="true">
                 <div class="preview-widget" id="preview-widget">
                   <div class="preview-rates" id="preview-rates">
                     <span class="rate-upload">
-                      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="icons/feather.svg#arrow-up"></use></svg>
+                      <span class="icon icon-arrow-up" aria-hidden="true"></span>
                       <span id="preview-up">624</span><span id="preview-up-unit">KB/s</span>
                     </span>
                     <span class="rate-download">
-                      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="icons/feather.svg#arrow-down"></use></svg>
+                      <span class="icon icon-arrow-down" aria-hidden="true"></span>
                       <span id="preview-down">8.4</span><span id="preview-down-unit">MB/s</span>
                     </span>
                   </div>
                   <canvas id="preview-graph" width="448" height="108" hidden></canvas>
                 </div>
                 <div class="preview-tray">
-                  <svg class="icon"><use href="#icon-network"></use></svg>
-                  <svg class="icon"><use href="#icon-sound"></use></svg>
-                  <svg class="icon"><use href="#icon-battery"></use></svg>
+                  <span class="icon icon-network" aria-hidden="true"></span>
+                  <span class="icon icon-sound" aria-hidden="true"></span>
+                  <span class="icon icon-battery" aria-hidden="true"></span>
                 </div>
               </div>
             </figure>
@@ -101,8 +71,8 @@
               <div class="setting-row">
                 <span id="layout-label" class="field-label">Layout</span>
                 <div class="segmented" role="group" aria-labelledby="layout-label">
-                  <label><input type="radio" name="layout" value="numbers" checked><span><svg class="icon" aria-hidden="true"><use href="#icon-numbers"></use></svg> Numbers</span></label>
-                  <label><input type="radio" name="layout" value="graph"><span><svg class="icon" aria-hidden="true"><use href="#icon-graph"></use></svg> Graph</span></label>
+                  <label><input type="radio" name="layout" value="numbers" checked><span><span class="icon icon-numbers" aria-hidden="true"></span> Numbers</span></label>
+                  <label><input type="radio" name="layout" value="graph"><span><span class="icon icon-graph" aria-hidden="true"></span> Graph</span></label>
                 </div>
               </div>
               <div class="setting-row">
@@ -174,7 +144,7 @@
             </header>
 
             <div class="release-card">
-              <div class="release-icon" aria-hidden="true"><svg class="icon"><use href="#icon-updates"></use></svg></div>
+              <div class="release-icon" aria-hidden="true"><span class="icon icon-updates" aria-hidden="true"></span></div>
               <div class="release-info"><h2>Installed version</h2><p id="installed-version">NetBar</p></div>
               <button class="button secondary" type="button" id="check-updates">Check for updates</button>
               <button class="button primary" type="button" id="install-update" hidden>Install update</button>
