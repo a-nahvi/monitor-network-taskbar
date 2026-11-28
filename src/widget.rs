@@ -761,7 +761,9 @@ impl Surface {
             {
                 let color = palette[usize::from(y as i32 >= self.height / 2)];
                 let (top, bottom) = samples.split_at(stride);
-                let samples = top.chunks_exact(2).zip(bottom.chunks_exact(2));
+                let (top, _) = top.as_chunks::<2>();
+                let (bottom, _) = bottom.as_chunks::<2>();
+                let samples = top.iter().zip(bottom);
                 for (pixel, (a, b)) in row.iter_mut().zip(samples) {
                     let coverage = u16::from(a[0] as u8)
                         + u16::from(a[1] as u8)
