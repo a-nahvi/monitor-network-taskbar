@@ -344,7 +344,7 @@ input::placeholder { color: var(--muted); opacity: 1; }
 }
 .release-icon { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 7px; background: var(--accent-wash); color: var(--accent); }
 .release-info h2 { font-size: 14px; font-weight: 650; }
-.release-info p { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; text-align: match-parent; }
+.release-info p { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .inline-status { min-height: 44px; padding-block: 8px; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
 .inline-status[data-tone="error"], .settings-status[data-tone="error"] { color: var(--danger); }
 .inline-status[data-tone="success"], .settings-status[data-tone="success"] { color: var(--success); }

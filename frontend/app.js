@@ -431,7 +431,7 @@ async function initialize() {
     savedStartup = state.startupEnabled;
     controls.startup.checked = savedStartup;
     controls.startup.disabled = !state.startupAllowed;
-    byId("installed-version").textContent = `NetBar ${state.version}`;
+    byId("installed-version-value").textContent = `NetBar ${state.version}`;
     writeControls();
     setStatus("update-status", state.updatesAllowed ? "" : "updatesUnavailable");
     workspace.inert = false;
