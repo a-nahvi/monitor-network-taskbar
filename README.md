@@ -25,6 +25,7 @@ Get-FileHash -Algorithm SHA256 -Path .\NetBar-*-Setup-x64.msi
 
 - **Right-click** the widget to pause or resume readings. Upload is the top row and download is the bottom row.
 - **Double-click** the widget or select **Settings** from the tray menu. Use **Display** for the layout, colors, position, and startup. Unlock the widget to drag it along the taskbar.
+- Choose English or Persian under **Display → Language**, then select **Save changes**. English uses a left-to-right settings layout. Persian uses a right-to-left layout.
 - Use **Network** to select an adapter, change the refresh interval, or switch between bytes and bits per second. Automatic selection prefers an active physical adapter to avoid double-counting VPN traffic.
 
 The widget runs on the primary horizontal taskbar. It hides over fullscreen applications and when the taskbar moves out of view. Opening Settings loads the Microsoft Edge WebView2 Runtime included with Windows 11. [Microsoft Edge WebView2](https://developer.microsoft.com/microsoft-edge/webview2/)

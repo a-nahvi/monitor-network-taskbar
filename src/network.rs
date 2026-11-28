@@ -25,19 +25,6 @@ pub struct Adapter {
     route: Option<u64>,
 }
 
-impl Adapter {
-    pub fn missing(id: String) -> Self {
-        Self {
-            id,
-            name: "Previously selected adapter (unavailable)".into(),
-            connected: false,
-            luid: 0,
-            hardware: false,
-            route: None,
-        }
-    }
-}
-
 fn text_at(value: &[u16]) -> String {
     String::from_utf16_lossy(&value[..value.iter().position(|&c| c == 0).unwrap_or(value.len())])
 }

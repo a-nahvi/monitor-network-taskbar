@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.3.0]
+
+- Choose English or Persian in Display settings. NetBar remembers the selected language and switches the settings layout between left-to-right and right-to-left.
+- Translate the system tray menu to match the saved language.
+
 ## [2.2.1]
 
 - Check for and install updates from public GitHub Releases without signing in.
@@ -28,6 +33,7 @@
 - Rewrite NetBar in Rust and preserve upgrades from the original Windows installer.
 - Add update checking and verified MSI installation in Settings.
 
+[2.3.0]: https://github.com/a-nahvi/monitor-network-taskbar/releases/tag/v2.3.0
 [2.2.1]: https://github.com/a-nahvi/monitor-network-taskbar/releases/tag/v2.2.1
 [2.2.0]: https://github.com/a-nahvi/monitor-network-taskbar/releases/tag/v2.2.0
 [2.1.1]: https://github.com/a-nahvi/monitor-network-taskbar/releases/tag/v2.1.1
