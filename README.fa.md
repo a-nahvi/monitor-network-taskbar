@@ -1,12 +1,12 @@
 <div dir="rtl" lang="fa">
 
-# NetBar
+# نت‌بار (NetBar)
 
 **فارسی** · [English](README.md)
 
 [![آزمون‌های ویندوز](https://github.com/a-nahvi/monitor-network-taskbar/actions/workflows/ci.yml/badge.svg)](https://github.com/a-nahvi/monitor-network-taskbar/actions/workflows/ci.yml)
 
-NetBar سرعت لحظه‌ای آپلود و دانلود را کنار آیکن‌های ناحیهٔ اعلان ویندوز ۱۱ نسخهٔ ۶۴ بیتی نمایش می‌دهد. سرعت را می‌توان به‌صورت عدد یا روی نمودار ۶۰ ثانیه‌ای دید. برنامه با Rust و Tauri ساخته شده و ویجت نوار وظیفه را روی یک تصویر بیت‌مپ ترسیم می‌کند که برای استفادهٔ دوباره در حافظه نگه داشته می‌شود.
+نت‌بار سرعت لحظه‌ای آپلود و دانلود را کنار آیکن‌های ناحیهٔ اعلان ویندوز ۱۱ نسخهٔ ۶۴ بیتی نمایش می‌دهد. سرعت را می‌توان به‌صورت عدد یا روی نمودار ۶۰ ثانیه‌ای دید. برنامه با Rust و Tauri ساخته شده و ویجت نوار وظیفه را روی یک تصویر بیت‌مپ ترسیم می‌کند که برای استفادهٔ دوباره در حافظه نگه داشته می‌شود.
 
 **[دانلود آخرین نصب‌کنندهٔ ویندوز](https://github.com/a-nahvi/monitor-network-taskbar/releases/latest)** · [گزارش مشکل](https://github.com/a-nahvi/monitor-network-taskbar/issues)
 
@@ -17,7 +17,7 @@ NetBar سرعت لحظه‌ای آپلود و دانلود را کنار آیک�
 
 دانلود و بررسی به‌روزرسانی به ورود به GitHub نیاز ندارد. اگر نسخه‌ای قدیمی خطای ورود به GitHub نشان داد، آخرین فایل MSI را اجرا کنید. نصب‌کننده برای حساب کاربری فعلی اجرا می‌شود و نسخهٔ MSI موجود را با حفظ تنظیمات و میان‌بر اجرای خودکار ارتقا می‌دهد. تنظیمات در <span dir="ltr">`%LocalAppData%\NetBar\NetBar.ini`</span> ذخیره می‌شوند. برای حذف برنامه به <span dir="ltr">**Windows Settings → Apps → Installed apps**</span> بروید.
 
-NetBar پیش از اجرای Windows Installer اندازهٔ فایل، مقدار SHA-256 و شناسهٔ بستهٔ MSI را بررسی می‌کند. اگر فایل را دستی دانلود کرده‌اید، خروجی دستور زیر را با <span dir="ltr">`NetBar-<version>-SHA256.txt`</span> مقایسه کنید. این فایل از نسخهٔ <span dir="ltr">2.2.1</span> همراه انتشارها ارائه می‌شود.
+نت‌بار پیش از اجرای Windows Installer اندازهٔ فایل، مقدار SHA-256 و شناسهٔ بستهٔ MSI را بررسی می‌کند. اگر فایل را دستی دانلود کرده‌اید، خروجی دستور زیر را با <span dir="ltr">`NetBar-<version>-SHA256.txt`</span> مقایسه کنید. این فایل از نسخهٔ <span dir="ltr">2.2.1</span> همراه انتشارها ارائه می‌شود.
 
 <div dir="ltr">
 
@@ -74,6 +74,6 @@ pwsh -File .\scripts\release.ps1
 
 ## مجوز
 
-NetBar با مجوز MIT منتشر می‌شود. پیکان‌های نمایش سرعت از مجموعهٔ Feather Icons هستند و متن مجوزشان در مخزن قرار دارد. [مجوز MIT](LICENSE) · [Feather Icons](https://feathericons.com/) · [متن مجوز آیکن‌ها](frontend/licenses/feather.txt)
+نت‌بار با مجوز MIT منتشر می‌شود. پیکان‌های نمایش سرعت از مجموعهٔ Feather Icons هستند و متن مجوزشان در مخزن قرار دارد. [مجوز MIT](LICENSE) · [Feather Icons](https://feathericons.com/) · [متن مجوز آیکن‌ها](frontend/licenses/feather.txt)
 
 </div>
